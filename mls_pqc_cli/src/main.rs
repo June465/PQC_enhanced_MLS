@@ -1,25 +1,17 @@
 //! # MLS PQC CLI
 //!
 //! Command-line interface for PQC-enhanced MLS protocol operations.
-//!
-//! ## Usage
-//!
-//! ```bash
-//! mls_pqc_cli [OPTIONS] <COMMAND>
-//! ```
-//!
-//! ## Commands
-//!
-//! - `init-group` - Create a new MLS group
-//! - `add-member` - Add a member to an existing group
-//! - `remove-member` - Remove a member from a group
-//! - `commit` - Commit pending proposals
-//! - `encrypt` - Encrypt a message for the group
-//! - `decrypt` - Decrypt a message from the group
-//! - `key-package` - Generate a key package for joining groups
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+use std::fs::File;
+use std::io::{Read, Write};
+use serde::{Serialize, Deserialize};
+
+// Import Engine
+use mls_pqc_engine::engine::MlsEngine;
+use mls_pqc_engine::engine::state::GroupState;
+use mls_pqc_engine::error::EngineError;
 
 /// PQC-enhanced MLS protocol CLI
 #[derive(Parser, Debug)]
@@ -89,7 +81,7 @@ pub enum Commands {
         key_package: PathBuf,
     },
 
-    /// Remove a member from a group
+    /// Remove a member from a group (Not Implemented)
     RemoveMember {
         /// Group identifier
         #[arg(long, short = 'g')]
@@ -100,14 +92,14 @@ pub enum Commands {
         member_id: String,
     },
 
-    /// Commit pending proposals to the group
+    /// Commit pending proposals (Not Implemented)
     Commit {
         /// Group identifier
         #[arg(long, short = 'g')]
         group_id: String,
     },
 
-    /// Encrypt a message for the group
+    /// Encrypt a message
     Encrypt {
         /// Group identifier
         #[arg(long, short = 'g')]
@@ -118,7 +110,7 @@ pub enum Commands {
         plaintext: String,
     },
 
-    /// Decrypt a message from the group
+    /// Decrypt a message
     Decrypt {
         /// Group identifier
         #[arg(long, short = 'g')]
@@ -129,7 +121,7 @@ pub enum Commands {
         ciphertext: String,
     },
 
-    /// Generate a key package for joining groups
+    /// Generate a key package
     KeyPackage {
         /// Identity for the key package
         #[arg(long, short = 'm')]
@@ -141,53 +133,152 @@ pub enum Commands {
     },
 }
 
-fn main() {
-    let cli = Cli::parse();
+#[derive(Serialize)]
+struct CommandOutput {
+    command: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result_data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
 
-    // For Phase 0, we just print confirmation that the CLI parsed correctly
-    // Full command implementation will be added in Phase 1
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+    let engine = MlsEngine::new()?;
+
+    // Ensure state dir exists
+    if !cli.state_dir.exists() {
+        std::fs::create_dir_all(&cli.state_dir)?;
+    }
+
     match &cli.command {
         Commands::InitGroup { group_id, member_id } => {
-            println!(
-                "{{\"command\": \"init-group\", \"group_id\": \"{}\", \"member_id\": \"{}\", \"status\": \"not_implemented\"}}",
-                group_id, member_id
-            );
+            // Note: member_id is ignored in current engine impl (uses "Creator"), 
+            // but we should pass it when engine supports it.
+            let group_state = engine.create_group(group_id.as_bytes())?;
+            
+            // Save state
+            let path = cli.state_dir.join(format!("{}.json", group_id));
+            group_state.save(path.to_str().unwrap())?;
+            
+            print_output(CommandOutput {
+                command: "init-group".into(),
+                status: "success".into(),
+                group_id: Some(group_id.clone()),
+                message: Some(format!("Group created by {}", member_id)),
+                result_data: None,
+                error: None,
+            });
         }
+        
         Commands::AddMember { group_id, key_package } => {
-            println!(
-                "{{\"command\": \"add-member\", \"group_id\": \"{}\", \"key_package\": \"{}\", \"status\": \"not_implemented\"}}",
-                group_id, key_package.display()
-            );
+            let path = cli.state_dir.join(format!("{}.json", group_id));
+            let mut group_state = GroupState::load(path.to_str().unwrap(), group_id.as_bytes())?;
+            
+            // Read key package from file
+            let mut file = File::open(key_package)?;
+            let mut kp_bytes = Vec::new();
+            file.read_to_end(&mut kp_bytes)?;
+            
+            match engine.add_member(&mut group_state, &kp_bytes) {
+                Ok((welcome, commit)) => {
+                    // Update state file
+                     group_state.save(path.to_str().unwrap())?;
+                     
+                     // In real CLI we might output welcome/commit to files.
+                     // Here we just indicate success.
+                     print_output(CommandOutput {
+                        command: "add-member".into(),
+                        status: "success".into(),
+                        group_id: Some(group_id.clone()),
+                        message: Some("Member added".into()),
+                        result_data: Some(format!("Welcome size: {}, Commit size: {}", welcome.len(), commit.len())),
+                        error: None,
+                    });
+                }
+                Err(e) => print_error("add-member", e),
+            }
         }
-        Commands::RemoveMember { group_id, member_id } => {
-            println!(
-                "{{\"command\": \"remove-member\", \"group_id\": \"{}\", \"member_id\": \"{}\", \"status\": \"not_implemented\"}}",
-                group_id, member_id
-            );
-        }
-        Commands::Commit { group_id } => {
-            println!(
-                "{{\"command\": \"commit\", \"group_id\": \"{}\", \"status\": \"not_implemented\"}}",
-                group_id
-            );
-        }
+        
         Commands::Encrypt { group_id, plaintext } => {
-            println!(
-                "{{\"command\": \"encrypt\", \"group_id\": \"{}\", \"plaintext_len\": {}, \"status\": \"not_implemented\"}}",
-                group_id, plaintext.len()
-            );
+             let path = cli.state_dir.join(format!("{}.json", group_id));
+             let mut group_state = GroupState::load(path.to_str().unwrap(), group_id.as_bytes())?;
+             
+             match engine.encrypt_message(&mut group_state, plaintext.as_bytes()) {
+                 Ok(ciphertext) => {
+                     // TODO: State update if encryption rolls ratchet? 
+                     // Usually encryption advances application ratchet but checks if it needs to save?
+                     // Usually application secret needs saving.
+                     group_state.save(path.to_str().unwrap())?;
+                     
+                     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+                     let ct_b64 = BASE64.encode(&ciphertext);
+                     
+                     print_output(CommandOutput {
+                        command: "encrypt".into(),
+                        status: "success".into(),
+                        group_id: Some(group_id.clone()),
+                        message: None,
+                        result_data: Some(ct_b64),
+                        error: None,
+                    });
+                 }
+                 Err(e) => print_error("encrypt", e),
+             }
         }
+        
         Commands::Decrypt { group_id, ciphertext } => {
-            println!(
-                "{{\"command\": \"decrypt\", \"group_id\": \"{}\", \"ciphertext_len\": {}, \"status\": \"not_implemented\"}}",
-                group_id, ciphertext.len()
-            );
+             let path = cli.state_dir.join(format!("{}.json", group_id));
+             let mut group_state = GroupState::load(path.to_str().unwrap(), group_id.as_bytes())?;
+             
+             use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+             let ct_bytes = BASE64.decode(ciphertext).map_err(|e| format!("Base64 error: {}", e))?; // Simple error mapping
+             
+             match engine.decrypt_message(&mut group_state, &ct_bytes) {
+                 Ok(pt_bytes) => {
+                     group_state.save(path.to_str().unwrap())?;
+                     let pt = String::from_utf8_lossy(&pt_bytes).to_string();
+                      print_output(CommandOutput {
+                        command: "decrypt".into(),
+                        status: "success".into(),
+                        group_id: Some(group_id.clone()),
+                        message: None,
+                        result_data: Some(pt),
+                        error: None,
+                    });
+                 }
+                 Err(e) => print_error("decrypt", e),
+             }
         }
-        Commands::KeyPackage { member_id, output } => {
+
+        _ => {
             println!(
-                "{{\"command\": \"key-package\", \"member_id\": \"{}\", \"output\": \"{}\", \"status\": \"not_implemented\"}}",
-                member_id, output.display()
+                "{{\"command\": \"unknown\", \"status\": \"not_implemented\", \"message\": \"Command not yet fully wired\"}}"
             );
         }
     }
+
+    Ok(())
+}
+
+fn print_output(output: CommandOutput) {
+    let json = serde_json::to_string(&output).unwrap();
+    println!("{}", json);
+}
+
+fn print_error(cmd: &str, e: impl std::fmt::Display) {
+    let output = CommandOutput {
+        command: cmd.into(),
+        status: "error".into(),
+        group_id: None,
+        message: None,
+        result_data: None,
+        error: Some(e.to_string()),
+    };
+    print_output(output);
 }
