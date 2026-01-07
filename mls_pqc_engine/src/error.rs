@@ -44,6 +44,14 @@ pub enum EngineError {
     /// Error reading/writing state files
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Generic error
+    #[error("Generic error: {0}")]
+    Generic(String),
+
+    /// Storage error
+    #[error("Storage error: {0}")]
+    Storage(String),
 }
 
 /// Result type alias for engine operations
