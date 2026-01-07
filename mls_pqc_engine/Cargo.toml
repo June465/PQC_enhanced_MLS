@@ -1,0 +1,26 @@
+[package]
+name = "mls_pqc_engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "PQC-enhanced MLS protocol engine"
+
+[dependencies]
+# OpenMLS core
+openmls = "0.7"
+openmls_traits = "0.3"
+openmls_rust_crypto = "0.3"
+openmls_basic_credential = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+
+# Error handling
+thiserror = "2.0"
+
+# Encoding
+base64 = "0.22"
+
+[dev-dependencies]
+# Testing utilities will be added in later phases

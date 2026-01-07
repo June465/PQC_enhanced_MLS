@@ -1,0 +1,9 @@
+[workspace]
+members = ["mls_pqc_engine", "mls_pqc_cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["PQC MLS Team"]
+license = "MIT OR Apache-2.0"
