@@ -13,6 +13,7 @@
 pub use openmls::prelude::*;
 pub use openmls_rust_crypto::OpenMlsRustCrypto;
 pub use openmls_basic_credential::SignatureKeyPair;
+pub use openmls_memory_storage::MemoryStorage;
 
 /// Error types for the MLS PQC Engine
 pub mod error;
@@ -22,3 +23,4 @@ pub mod engine;
 
 /// Crypto provider implementations
 pub mod provider;
+
