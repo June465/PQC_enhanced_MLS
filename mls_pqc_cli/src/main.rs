@@ -160,7 +160,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::InitGroup { group_id, member_id } => {
             // Note: member_id is ignored in current engine impl (uses "Creator"), 
             // but we should pass it when engine supports it.
-            let group_state = engine.create_group(group_id.as_bytes())?;
+            let group_state = engine.create_group(group_id.as_bytes(), member_id.as_bytes())?;
             
             // Save state
             let path = cli.state_dir.join(format!("{}.json", group_id));
@@ -178,7 +178,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         Commands::AddMember { group_id, key_package } => {
             let path = cli.state_dir.join(format!("{}.json", group_id));
-            let mut group_state = GroupState::load(path.to_str().unwrap(), group_id.as_bytes())?;
+            let mut group_state = GroupState::load(path.to_str().unwrap())?;
             
             // Read key package from file
             let mut file = File::open(key_package)?;
@@ -207,7 +207,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         Commands::Encrypt { group_id, plaintext } => {
              let path = cli.state_dir.join(format!("{}.json", group_id));
-             let mut group_state = GroupState::load(path.to_str().unwrap(), group_id.as_bytes())?;
+             let mut group_state = GroupState::load(path.to_str().unwrap())?;
              
              match engine.encrypt_message(&mut group_state, plaintext.as_bytes()) {
                  Ok(ciphertext) => {
@@ -234,7 +234,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         Commands::Decrypt { group_id, ciphertext } => {
              let path = cli.state_dir.join(format!("{}.json", group_id));
-             let mut group_state = GroupState::load(path.to_str().unwrap(), group_id.as_bytes())?;
+             let mut group_state = GroupState::load(path.to_str().unwrap())?;
              
              use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
              let ct_bytes = BASE64.decode(ciphertext).map_err(|e| format!("Base64 error: {}", e))?; // Simple error mapping
