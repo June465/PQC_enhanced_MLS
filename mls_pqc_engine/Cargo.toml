@@ -9,12 +9,14 @@ description = "PQC-enhanced MLS protocol engine"
 [dependencies]
 # OpenMLS core
 openmls = "0.7"
-openmls_traits = "0.3"
-openmls_rust_crypto = "0.3"
-openmls_basic_credential = "0.3"
+openmls_traits = "0.4"
+openmls_rust_crypto = "0.4"
+openmls_basic_credential = "0.4"
+openmls_memory_storage = { version = "0.4", features = ["persistence"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
+tls_codec = { version = "0.4", features = ["derive"] }
 
 # Error handling
 thiserror = "2.0"
@@ -24,4 +26,4 @@ base64 = "0.22"
 serde_json = "1.0.149"
 
 [dev-dependencies]
-# Testing utilities will be added in later phases
+tempfile = "3.15"
