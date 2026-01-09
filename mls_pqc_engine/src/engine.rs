@@ -1,53 +1,288 @@
-//! Engine operations for MLS group management
+//! Engine operations for MLS group management.
+//!
+//! This module provides the core MLS operations:
+//! - Group creation and management
+//! - Member addition and removal
+//! - Message encryption and decryption
 
-use crate::error::{EngineResult, EngineError};
-// use openmls::prelude::*;
+use crate::error::{EngineError, EngineResult};
+use crate::provider::DEFAULT_CIPHERSUITE;
 
 pub mod state;
-// Export explicit types to make them available
-use state::{GroupState, SerializableStorage};
-// use openmls_traits::OpenMlsProvider;
+
+pub use state::{GroupState, MemberIdentity, SerializedIdentity};
+
+use openmls::prelude::*;
+use openmls_rust_crypto::OpenMlsRustCrypto;
+use tls_codec::Serialize as TlsSerialize;
+
+/// Bundle returned when generating a key package for a new member.
+/// Contains everything needed to process a welcome message.
+pub struct KeyPackageData {
+    /// Serialized key package bytes to share with the group creator
+    pub key_package_bytes: Vec<u8>,
+    /// The member's identity
+    pub identity: MemberIdentity,
+    /// The provider containing the private key material
+    pub provider: OpenMlsRustCrypto,
+}
 
 /// The MLS Engine handling group operations.
-/// Stateless because state is passed in via GroupState.
+/// 
+/// This engine is stateless - all state is passed via GroupState.
 pub struct MlsEngine;
 
 impl MlsEngine {
-    /// Create a new MLS engine instance
+    /// Create a new MLS engine instance.
     pub fn new() -> EngineResult<Self> {
         Ok(Self)
     }
 
-    /// Create a new group with the given group ID.
+    /// Create a new group with the given group ID and member name.
     /// Returns the initial GroupState.
-    pub fn create_group(&self, _group_id_bytes: &[u8]) -> EngineResult<GroupState> {
-        let group_state = GroupState::new();
+    pub fn create_group(&self, group_id: &[u8], member_name: &[u8]) -> EngineResult<GroupState> {
+        // Create member identity with credentials and signing keys
+        let identity = MemberIdentity::new(member_name, DEFAULT_CIPHERSUITE)?;
         
-        // TODO: Re-enable logic when OpenMLS trait bounds are resolved.
-        // Currently returns empty state (no group) to satisfy compilation.
-        /*
-        let group_id = GroupId::from_slice(group_id_bytes);
-        
-        // ... (Logic commented out due to strict trait bound mismatches in current env)
-        */
-
-        Ok(group_state)
+        // Create the group state
+        GroupState::new(group_id, identity)
     }
 
-    /// Add a member to the group.
-    /// Returns (Welcome Message Bytes, Commit Message Bytes)
-    pub fn add_member(&self, _group_state: &mut GroupState, _new_member_key_package_bytes: &[u8]) -> EngineResult<(Vec<u8>, Vec<u8>)> {
-        // Placeholder
-        Err(EngineError::Generic("Add Member not implemented".into()))
+    /// Generate a key package for a new member to join a group.
+    /// Returns KeyPackageData containing everything needed to join a group.
+    pub fn generate_key_package(&self, member_name: &[u8]) -> EngineResult<KeyPackageData> {
+        let provider = OpenMlsRustCrypto::default();
+        
+        // Create member identity
+        let identity = MemberIdentity::new(member_name, DEFAULT_CIPHERSUITE)?;
+        identity.store_keys(&provider)?;
+        
+        // Generate key package bundle
+        let key_package_bundle = KeyPackage::builder()
+            .build(
+                DEFAULT_CIPHERSUITE,
+                &provider,
+                &identity.signature_keys,
+                identity.credential_with_key.clone(),
+            )
+            .map_err(|e| EngineError::Generic(format!("Failed to create key package: {:?}", e)))?;
+        
+        // Serialize the key package (not the bundle) to bytes using TLS encoding
+        let key_package_bytes = key_package_bundle.key_package().tls_serialize_detached()
+            .map_err(|e| EngineError::Serialization(format!("Failed to serialize key package: {:?}", e)))?;
+        
+        Ok(KeyPackageData {
+            key_package_bytes,
+            identity,
+            provider,
+        })
     }
-    
-    // Decrypt
-    pub fn decrypt_message(&self, _group_state: &mut GroupState, _message_bytes: &[u8]) -> EngineResult<Vec<u8>> {
-         Err(EngineError::Generic("Decrypt not implemented".into()))
+
+    /// Add a member to the group using their key package.
+    /// Returns (Welcome bytes, Commit bytes).
+    pub fn add_member(
+        &self,
+        group_state: &mut GroupState,
+        key_package_bytes: &[u8],
+    ) -> EngineResult<(Vec<u8>, Vec<u8>)> {
+        // Ensure signature keys are in storage
+        group_state.identity.store_keys(&group_state.provider)?;
+        
+        // Deserialize the key package
+        let key_package = KeyPackageIn::tls_deserialize_exact_bytes(key_package_bytes)
+            .map_err(|e| EngineError::Deserialization(format!("Invalid key package: {:?}", e)))?;
+        
+        // Validate the key package
+        let validated_kp = key_package
+            .validate(group_state.provider.crypto(), ProtocolVersion::Mls10)
+            .map_err(|e| EngineError::MemberAddition(format!("Key package validation failed: {:?}", e)))?;
+        
+        // Add the member - returns (MlsMessageOut, Welcome, Option<GroupInfo>)
+        let (commit_msg, welcome, _group_info) = group_state.group
+            .add_members(&group_state.provider, &group_state.identity.signature_keys, &[validated_kp])
+            .map_err(|e| EngineError::MemberAddition(format!("Failed to add member: {:?}", e)))?;
+        
+        // Merge the pending commit
+        group_state.group
+            .merge_pending_commit(&group_state.provider)
+            .map_err(|e| EngineError::CommitProcessing(format!("Failed to merge commit: {:?}", e)))?;
+        
+        // Serialize messages
+        let welcome_bytes = welcome.tls_serialize_detached()
+            .map_err(|e| EngineError::Serialization(format!("Failed to serialize welcome: {:?}", e)))?;
+        
+        let commit_bytes = commit_msg.tls_serialize_detached()
+            .map_err(|e| EngineError::Serialization(format!("Failed to serialize commit: {:?}", e)))?;
+        
+        Ok((welcome_bytes, commit_bytes))
     }
-    
-    // Encrypt
-    pub fn encrypt_message(&self, _group_state: &mut GroupState, _message: &[u8]) -> EngineResult<Vec<u8>> {
-         Err(EngineError::Generic("Encrypt not implemented".into()))
+
+    /// Process a welcome message to join a group.
+    /// Takes the KeyPackageData that was used to generate the key package.
+    /// Returns a new GroupState for the joining member.
+    pub fn process_welcome(
+        &self,
+        welcome_bytes: &[u8],
+        kp_data: KeyPackageData,
+    ) -> EngineResult<GroupState> {
+        let provider = kp_data.provider;
+        let identity = kp_data.identity;
+        
+        // Deserialize welcome message (comes as MlsMessageOut, deserialize as MlsMessageIn)
+        let mls_message = MlsMessageIn::tls_deserialize_exact_bytes(welcome_bytes)
+            .map_err(|e| EngineError::Deserialization(format!("Invalid welcome message: {:?}", e)))?;
+        
+        // Extract the welcome from the message body
+        let welcome = match mls_message.extract() {
+            MlsMessageBodyIn::Welcome(w) => w,
+            _ => return Err(EngineError::Deserialization("Message is not a Welcome".into())),
+        };
+        
+        // Join configuration
+        let join_config = MlsGroupJoinConfig::builder()
+            .use_ratchet_tree_extension(true)
+            .build();
+        
+        // Stage the welcome
+        let staged = StagedWelcome::new_from_welcome(
+            &provider,
+            &join_config,
+            welcome,
+            None, // No ratchet tree, using extension
+        ).map_err(|e| EngineError::Generic(format!("Failed to stage welcome: {:?}", e)))?;
+        
+        // Create the group from staged welcome
+        let group = staged.into_group(&provider)
+            .map_err(|e| EngineError::Generic(format!("Failed to create group from welcome: {:?}", e)))?;
+        
+        Ok(GroupState::from_group(group, identity, provider))
+    }
+
+    /// Encrypt a message for the group.
+    /// Returns the ciphertext bytes.
+    pub fn encrypt_message(
+        &self,
+        group_state: &mut GroupState,
+        plaintext: &[u8],
+    ) -> EngineResult<Vec<u8>> {
+        // Ensure signature keys are in storage
+        group_state.identity.store_keys(&group_state.provider)?;
+        
+        // Create the encrypted message
+        let mls_message = group_state.group
+            .create_message(&group_state.provider, &group_state.identity.signature_keys, plaintext)
+            .map_err(|e| EngineError::Encryption(format!("Failed to encrypt message: {:?}", e)))?;
+        
+        // Serialize to bytes
+        let ciphertext = mls_message.tls_serialize_detached()
+            .map_err(|e| EngineError::Serialization(format!("Failed to serialize message: {:?}", e)))?;
+        
+        Ok(ciphertext)
+    }
+
+    /// Decrypt a message from the group.
+    /// Returns the plaintext bytes.
+    pub fn decrypt_message(
+        &self,
+        group_state: &mut GroupState,
+        ciphertext: &[u8],
+    ) -> EngineResult<Vec<u8>> {
+        // Deserialize the message
+        let mls_message = MlsMessageIn::tls_deserialize_exact_bytes(ciphertext)
+            .map_err(|e| EngineError::Deserialization(format!("Invalid ciphertext: {:?}", e)))?;
+        
+        // Convert to protocol message
+        let protocol_message = mls_message
+            .try_into_protocol_message()
+            .map_err(|e| EngineError::Decryption(format!("Not a protocol message: {:?}", e)))?;
+        
+        // Process the message
+        let processed = group_state.group
+            .process_message(&group_state.provider, protocol_message)
+            .map_err(|e| EngineError::Decryption(format!("Failed to process message: {:?}", e)))?;
+        
+        // Extract application message content
+        match processed.into_content() {
+            ProcessedMessageContent::ApplicationMessage(app_msg) => {
+                Ok(app_msg.into_bytes())
+            }
+            ProcessedMessageContent::StagedCommitMessage(staged_commit) => {
+                // This is a commit message, merge it
+                group_state.group
+                    .merge_staged_commit(&group_state.provider, *staged_commit)
+                    .map_err(|e| EngineError::CommitProcessing(format!("Failed to merge commit: {:?}", e)))?;
+                Err(EngineError::Decryption("Received commit message, not application message".into()))
+            }
+            _ => {
+                Err(EngineError::Decryption("Unexpected message type".into()))
+            }
+        }
+    }
+
+    /// Remove a member from the group by their leaf index.
+    /// Returns the Commit bytes.
+    pub fn remove_member(
+        &self,
+        group_state: &mut GroupState,
+        leaf_index: u32,
+    ) -> EngineResult<Vec<u8>> {
+        // Ensure signature keys are in storage
+        group_state.identity.store_keys(&group_state.provider)?;
+        
+        // Remove the member
+        let (commit_msg, _welcome, _group_info) = group_state.group
+            .remove_members(&group_state.provider, &group_state.identity.signature_keys, &[LeafNodeIndex::new(leaf_index)])
+            .map_err(|e| EngineError::MemberRemoval(format!("Failed to remove member: {:?}", e)))?;
+        
+        // Merge the pending commit
+        group_state.group
+            .merge_pending_commit(&group_state.provider)
+            .map_err(|e| EngineError::CommitProcessing(format!("Failed to merge commit: {:?}", e)))?;
+        
+        // Serialize commit
+        let commit_bytes = commit_msg.tls_serialize_detached()
+            .map_err(|e| EngineError::Serialization(format!("Failed to serialize commit: {:?}", e)))?;
+        
+        Ok(commit_bytes)
+    }
+
+    /// Process incoming commit message (for members receiving commits).
+    pub fn process_commit(
+        &self,
+        group_state: &mut GroupState,
+        commit_bytes: &[u8],
+    ) -> EngineResult<()> {
+        // Deserialize the commit message
+        let mls_message = MlsMessageIn::tls_deserialize_exact_bytes(commit_bytes)
+            .map_err(|e| EngineError::Deserialization(format!("Invalid commit message: {:?}", e)))?;
+        
+        // Convert to protocol message
+        let protocol_message = mls_message
+            .try_into_protocol_message()
+            .map_err(|e| EngineError::CommitProcessing(format!("Not a protocol message: {:?}", e)))?;
+        
+        // Process the message
+        let processed = group_state.group
+            .process_message(&group_state.provider, protocol_message)
+            .map_err(|e| EngineError::CommitProcessing(format!("Failed to process commit: {:?}", e)))?;
+        
+        // Handle the commit
+        match processed.into_content() {
+            ProcessedMessageContent::StagedCommitMessage(staged_commit) => {
+                group_state.group
+                    .merge_staged_commit(&group_state.provider, *staged_commit)
+                    .map_err(|e| EngineError::CommitProcessing(format!("Failed to merge commit: {:?}", e)))?;
+                Ok(())
+            }
+            _ => {
+                Err(EngineError::CommitProcessing("Expected commit message".into()))
+            }
+        }
+    }
+}
+
+impl Default for MlsEngine {
+    fn default() -> Self {
+        Self
     }
 }
