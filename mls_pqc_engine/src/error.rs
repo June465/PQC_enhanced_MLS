@@ -52,6 +52,10 @@ pub enum EngineError {
     /// Storage error
     #[error("Storage error: {0}")]
     Storage(String),
+
+    /// PQC KEM error
+    #[error("KEM error: {0}")]
+    KemError(String),
 }
 
 /// Result type alias for engine operations
