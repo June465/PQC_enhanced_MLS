@@ -29,5 +29,10 @@ serde_json = "1.0.149"
 ml-kem = "0.2"
 rand = "0.8"
 
+# Hybrid KEM (Classical + PQC)
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+hkdf = "0.12"
+sha2 = "0.10"
+
 [dev-dependencies]
 tempfile = "3.15"
