@@ -3,7 +3,7 @@
 //! These tests verify the correct operation of the MLS engine,
 //! including group creation, member management, and secure messaging.
 
-use mls_pqc_engine::engine::{MlsEngine, GroupState, KeyPackageData};
+use mls_pqc_engine::engine::{MlsEngine, GroupState};
 use mls_pqc_engine::error::EngineResult;
 use tempfile::tempdir;
 
