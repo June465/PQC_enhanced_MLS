@@ -1,6 +1,7 @@
 //! State management for MLS groups and members.
 //!
-//! Provides persistence and management for MLS group state.
+//! Provides persistence and management for MLS group state,
+//! including suite selection and PQC keypair storage.
 
 use openmls::prelude::*;
 use openmls_rust_crypto::OpenMlsRustCrypto;
@@ -12,6 +13,7 @@ use tls_codec::Serialize as TlsSerialize;
 
 use crate::error::{EngineError, EngineResult};
 use crate::provider::DEFAULT_CIPHERSUITE;
+use super::suite::CryptoSuite;
 
 /// Member identity containing credentials and signing keys.
 pub struct MemberIdentity {
@@ -89,12 +91,23 @@ pub struct SerializedIdentity {
     pub signature_key_bytes: Vec<u8>,
 }
 
+/// Serializable PQC/Hybrid keypair for persistence
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SerializedPqcKeyPair {
+    /// Public key (PQC or Hybrid combined)
+    pub public_key: Vec<u8>,
+    /// Private key (PQC or Hybrid combined)
+    pub private_key: Vec<u8>,
+}
+
 /// Holds the runtime state of an MLS group.
 /// 
 /// This structure combines:
 /// - The MlsGroup instance
 /// - The member's identity (credentials + signing keys)
 /// - The OpenMLS provider for cryptographic operations
+/// - The crypto suite selection (Classic/PQC/Hybrid)
+/// - Optional PQC/Hybrid keypair for enhanced security
 pub struct GroupState {
     /// The OpenMLS group instance.
     pub group: MlsGroup,
@@ -102,6 +115,10 @@ pub struct GroupState {
     pub identity: MemberIdentity,
     /// The OpenMLS provider (crypto + storage).
     pub provider: OpenMlsRustCrypto,
+    /// The cryptographic suite in use.
+    pub suite: CryptoSuite,
+    /// Optional PQC/Hybrid keypair (present when suite != Classic).
+    pub pqc_keypair: Option<SerializedPqcKeyPair>,
 }
 
 impl GroupState {
@@ -134,6 +151,44 @@ impl GroupState {
             group,
             identity,
             provider,
+            suite: CryptoSuite::Classic,
+            pqc_keypair: None,
+        })
+    }
+
+    /// Create a new group with specified crypto suite.
+    pub fn new_with_suite(
+        group_id: &[u8],
+        identity: MemberIdentity,
+        suite: CryptoSuite,
+        pqc_keypair: Option<SerializedPqcKeyPair>,
+    ) -> EngineResult<Self> {
+        let provider = OpenMlsRustCrypto::default();
+        
+        // Store the signature keys
+        identity.store_keys(&provider)?;
+        
+        // Create the MLS group configuration
+        let group_config = MlsGroupCreateConfig::builder()
+            .ciphersuite(DEFAULT_CIPHERSUITE)
+            .use_ratchet_tree_extension(true)
+            .build();
+        
+        // Create the MLS group
+        let group = MlsGroup::new_with_group_id(
+            &provider,
+            &identity.signature_keys,
+            &group_config,
+            GroupId::from_slice(group_id),
+            identity.credential_with_key.clone(),
+        ).map_err(|e| EngineError::GroupCreation(format!("{:?}", e)))?;
+
+        Ok(Self {
+            group,
+            identity,
+            provider,
+            suite,
+            pqc_keypair,
         })
     }
     
@@ -147,17 +202,37 @@ impl GroupState {
             group,
             identity,
             provider,
+            suite: CryptoSuite::Classic,
+            pqc_keypair: None,
+        }
+    }
+
+    /// Create a GroupState from an existing group with suite and PQC keypair.
+    pub fn from_group_with_suite(
+        group: MlsGroup,
+        identity: MemberIdentity,
+        provider: OpenMlsRustCrypto,
+        suite: CryptoSuite,
+        pqc_keypair: Option<SerializedPqcKeyPair>,
+    ) -> Self {
+        Self {
+            group,
+            identity,
+            provider,
+            suite,
+            pqc_keypair,
         }
     }
 
     /// Save the group state to a file.
-    /// Note: For Phase 1, this only saves the group_id and identity.
-    /// Full MLS state persistence would require additional work.
+    /// Saves group_id, identity, suite, and optional PQC keypair.
     pub fn save(&self, path: &str) -> EngineResult<()> {
         let snapshot = GroupStateSnapshot {
             group_id: self.group.group_id().as_slice().to_vec(),
             identity: self.identity.to_bytes()?,
             epoch: self.group.epoch().as_u64(),
+            suite: self.suite,
+            pqc_keypair: self.pqc_keypair.clone(),
         };
 
         let file = File::create(path)?;
@@ -178,9 +253,11 @@ impl GroupState {
             .map_err(|e| EngineError::Deserialization(e.to_string()))?;
 
         let identity = MemberIdentity::from_serialized(snapshot.identity)?;
+        let suite = snapshot.suite;
+        let pqc_keypair = snapshot.pqc_keypair;
         
-        // Recreate the group (note: this resets state in Phase 1)
-        GroupState::new(&snapshot.group_id, identity)
+        // Recreate the group with suite info
+        GroupState::new_with_suite(&snapshot.group_id, identity, suite, pqc_keypair)
     }
     
     /// Get the group ID as a string (for display purposes).
@@ -203,4 +280,10 @@ struct GroupStateSnapshot {
     identity: SerializedIdentity,
     /// The epoch at save time (for reference).
     epoch: u64,
+    /// The cryptographic suite in use.
+    #[serde(default)]
+    suite: CryptoSuite,
+    /// Optional PQC/Hybrid keypair.
+    #[serde(default)]
+    pqc_keypair: Option<SerializedPqcKeyPair>,
 }
