@@ -5,13 +5,12 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::fs::File;
-use std::io::{Read, Write};
-use serde::{Serialize, Deserialize};
+use std::io::Read;
+use serde::Serialize;
 
-// Import Engine
-use mls_pqc_engine::engine::MlsEngine;
+// Import Engine and types
+use mls_pqc_engine::engine::{MlsEngine, CryptoSuite};
 use mls_pqc_engine::engine::state::GroupState;
-use mls_pqc_engine::error::EngineError;
 
 /// PQC-enhanced MLS protocol CLI
 #[derive(Parser, Debug)]
@@ -45,6 +44,16 @@ pub enum Suite {
     PqcKem,
     /// Hybrid: Classic + PQC
     HybridKem,
+}
+
+impl From<Suite> for CryptoSuite {
+    fn from(suite: Suite) -> CryptoSuite {
+        match suite {
+            Suite::Classic => CryptoSuite::Classic,
+            Suite::PqcKem => CryptoSuite::PqcKem,
+            Suite::HybridKem => CryptoSuite::HybridKem,
+        }
+    }
 }
 
 /// Output format options
@@ -138,6 +147,8 @@ struct CommandOutput {
     command: String,
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    suite: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     group_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
@@ -158,9 +169,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match &cli.command {
         Commands::InitGroup { group_id, member_id } => {
-            // Note: member_id is ignored in current engine impl (uses "Creator"), 
-            // but we should pass it when engine supports it.
-            let group_state = engine.create_group(group_id.as_bytes(), member_id.as_bytes())?;
+            // Convert CLI suite to engine CryptoSuite
+            let crypto_suite: CryptoSuite = cli.suite.into();
+            
+            // Create group with specified suite
+            let group_state = engine.create_group_with_suite(
+                group_id.as_bytes(),
+                member_id.as_bytes(),
+                crypto_suite,
+            )?;
             
             // Save state
             let path = cli.state_dir.join(format!("{}.json", group_id));
@@ -169,8 +186,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             print_output(CommandOutput {
                 command: "init-group".into(),
                 status: "success".into(),
+                suite: Some(crypto_suite.to_string()),
                 group_id: Some(group_id.clone()),
-                message: Some(format!("Group created by {}", member_id)),
+                message: Some(format!("Group created by {} with {} suite", member_id, crypto_suite.description())),
                 result_data: None,
                 error: None,
             });
@@ -195,6 +213,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                      print_output(CommandOutput {
                         command: "add-member".into(),
                         status: "success".into(),
+                        suite: Some(group_state.suite.to_string()),
                         group_id: Some(group_id.clone()),
                         message: Some("Member added".into()),
                         result_data: Some(format!("Welcome size: {}, Commit size: {}", welcome.len(), commit.len())),
@@ -222,6 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                      print_output(CommandOutput {
                         command: "encrypt".into(),
                         status: "success".into(),
+                        suite: Some(group_state.suite.to_string()),
                         group_id: Some(group_id.clone()),
                         message: None,
                         result_data: Some(ct_b64),
@@ -246,6 +266,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                       print_output(CommandOutput {
                         command: "decrypt".into(),
                         status: "success".into(),
+                        suite: Some(group_state.suite.to_string()),
                         group_id: Some(group_id.clone()),
                         message: None,
                         result_data: Some(pt),
@@ -275,6 +296,7 @@ fn print_error(cmd: &str, e: impl std::fmt::Display) {
     let output = CommandOutput {
         command: cmd.into(),
         status: "error".into(),
+        suite: None,
         group_id: None,
         message: None,
         result_data: None,
