@@ -4,13 +4,17 @@
 //! - Group creation and management
 //! - Member addition and removal
 //! - Message encryption and decryption
+//! - PQC/Hybrid suite support
 
 use crate::error::{EngineError, EngineResult};
 use crate::provider::DEFAULT_CIPHERSUITE;
+use crate::provider::{PqcKemProvider, HybridKemProvider};
 
 pub mod state;
+pub mod suite;
 
-pub use state::{GroupState, MemberIdentity, SerializedIdentity};
+pub use state::{GroupState, MemberIdentity, SerializedIdentity, SerializedPqcKeyPair};
+pub use suite::CryptoSuite;
 
 use openmls::prelude::*;
 use openmls_rust_crypto::OpenMlsRustCrypto;
@@ -25,6 +29,10 @@ pub struct KeyPackageData {
     pub identity: MemberIdentity,
     /// The provider containing the private key material
     pub provider: OpenMlsRustCrypto,
+    /// The crypto suite used
+    pub suite: CryptoSuite,
+    /// Optional PQC/Hybrid keypair for PQC-enhanced operations
+    pub pqc_keypair: Option<SerializedPqcKeyPair>,
 }
 
 /// The MLS Engine handling group operations.
@@ -51,6 +59,50 @@ impl MlsEngine {
     /// Generate a key package for a new member to join a group.
     /// Returns KeyPackageData containing everything needed to join a group.
     pub fn generate_key_package(&self, member_name: &[u8]) -> EngineResult<KeyPackageData> {
+        self.generate_key_package_with_suite(member_name, CryptoSuite::Classic)
+    }
+
+    /// Create a new group with specified crypto suite.
+    /// When suite is PQC or Hybrid, additional PQC keypairs are generated.
+    pub fn create_group_with_suite(
+        &self,
+        group_id: &[u8],
+        member_name: &[u8],
+        suite: CryptoSuite,
+    ) -> EngineResult<GroupState> {
+        // Create member identity with credentials and signing keys
+        let identity = MemberIdentity::new(member_name, DEFAULT_CIPHERSUITE)?;
+        
+        // Generate PQC keypair if needed
+        let pqc_keypair = match suite {
+            CryptoSuite::Classic => None,
+            CryptoSuite::PqcKem => {
+                let kp = PqcKemProvider::generate_keypair()?;
+                Some(SerializedPqcKeyPair {
+                    public_key: kp.encapsulation_key,
+                    private_key: kp.decapsulation_key,
+                })
+            }
+            CryptoSuite::HybridKem => {
+                let kp = HybridKemProvider::generate_keypair()?;
+                Some(SerializedPqcKeyPair {
+                    public_key: kp.public_key(),
+                    private_key: kp.private_key(),
+                })
+            }
+        };
+        
+        // Create the group state with suite
+        GroupState::new_with_suite(group_id, identity, suite, pqc_keypair)
+    }
+
+    /// Generate a key package with specified crypto suite.
+    /// When suite is PQC or Hybrid, additional PQC keypairs are generated.
+    pub fn generate_key_package_with_suite(
+        &self,
+        member_name: &[u8],
+        suite: CryptoSuite,
+    ) -> EngineResult<KeyPackageData> {
         let provider = OpenMlsRustCrypto::default();
         
         // Create member identity
@@ -71,10 +123,31 @@ impl MlsEngine {
         let key_package_bytes = key_package_bundle.key_package().tls_serialize_detached()
             .map_err(|e| EngineError::Serialization(format!("Failed to serialize key package: {:?}", e)))?;
         
+        // Generate PQC keypair if needed
+        let pqc_keypair = match suite {
+            CryptoSuite::Classic => None,
+            CryptoSuite::PqcKem => {
+                let kp = PqcKemProvider::generate_keypair()?;
+                Some(SerializedPqcKeyPair {
+                    public_key: kp.encapsulation_key,
+                    private_key: kp.decapsulation_key,
+                })
+            }
+            CryptoSuite::HybridKem => {
+                let kp = HybridKemProvider::generate_keypair()?;
+                Some(SerializedPqcKeyPair {
+                    public_key: kp.public_key(),
+                    private_key: kp.private_key(),
+                })
+            }
+        };
+        
         Ok(KeyPackageData {
             key_package_bytes,
             identity,
             provider,
+            suite,
+            pqc_keypair,
         })
     }
 
@@ -127,6 +200,8 @@ impl MlsEngine {
     ) -> EngineResult<GroupState> {
         let provider = kp_data.provider;
         let identity = kp_data.identity;
+        let suite = kp_data.suite;
+        let pqc_keypair = kp_data.pqc_keypair;
         
         // Deserialize welcome message (comes as MlsMessageOut, deserialize as MlsMessageIn)
         let mls_message = MlsMessageIn::tls_deserialize_exact_bytes(welcome_bytes)
@@ -155,7 +230,7 @@ impl MlsEngine {
         let group = staged.into_group(&provider)
             .map_err(|e| EngineError::Generic(format!("Failed to create group from welcome: {:?}", e)))?;
         
-        Ok(GroupState::from_group(group, identity, provider))
+        Ok(GroupState::from_group_with_suite(group, identity, provider, suite, pqc_keypair))
     }
 
     /// Encrypt a message for the group.
