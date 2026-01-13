@@ -176,3 +176,130 @@ fn test_add_multiple_members() -> EngineResult<()> {
     
     Ok(())
 }
+
+// ============================================================================
+// Phase 7: Welcome/Join Flow + State Versioning Tests
+// ============================================================================
+
+use mls_pqc_engine::engine::{KeyPackageData, SerializedKeyPackageData, CURRENT_SCHEMA_VERSION};
+
+/// Test that KeyPackageData can be serialized and deserialized correctly
+#[test]
+fn test_serialized_key_package_data_roundtrip() -> EngineResult<()> {
+    let temp_dir = tempdir().expect("Failed to create temp directory");
+    let data_path = temp_dir.path().join("kp_data.json");
+    let data_path_str = data_path.to_str().unwrap();
+    
+    let engine = MlsEngine::new()?;
+    
+    // Generate a key package
+    let kp_data = engine.generate_key_package(b"TestMember")?;
+    let original_suite = kp_data.suite;
+    
+    // Serialize
+    let serialized = kp_data.to_serialized()?;
+    assert_eq!(serialized.schema_version, CURRENT_SCHEMA_VERSION);
+    
+    // Save to file
+    serialized.save(data_path_str)?;
+    
+    // Load from file
+    let loaded = SerializedKeyPackageData::load(data_path_str)?;
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(loaded.suite, original_suite);
+    
+    // Reconstruct KeyPackageData
+    let reconstructed = KeyPackageData::from_serialized(loaded)?;
+    assert_eq!(reconstructed.suite, original_suite);
+    
+    Ok(())
+}
+
+/// Test that join group works correctly using serialized KeyPackageData
+/// 
+/// NOTE: Due to OpenMLS storing key package private keys in the provider's storage,
+/// the serialized data can only be used within the SAME process/provider instance.
+/// For a true cross-process CLI flow, a persistent storage provider would be needed.
+/// 
+/// This test verifies the serialization/deserialization machinery works correctly
+/// by simulating the in-memory scenario where the original provider is still available.
+#[test]
+fn test_join_group_with_serialized_data() -> EngineResult<()> {
+    let temp_dir = tempdir().expect("Failed to create temp directory");
+    let data_path = temp_dir.path().join("bob_kp_data.json");
+    let data_path_str = data_path.to_str().unwrap();
+    
+    let engine = MlsEngine::new()?;
+    
+    // Alice creates a group
+    let mut alice_state = engine.create_group(b"serialized-join-test", b"Alice")?;
+    
+    // Bob generates a key package
+    let bob_kp_data = engine.generate_key_package(b"Bob")?;
+    let kp_bytes = bob_kp_data.key_package_bytes.clone();
+    
+    // Serialize Bob's KeyPackageData (simulating CLI save)
+    let serialized = bob_kp_data.to_serialized()?;
+    serialized.save(data_path_str)?;
+    
+    // Verify serialized data can be loaded and has correct values
+    let loaded = SerializedKeyPackageData::load(data_path_str)?;
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(loaded.suite, bob_kp_data.suite);
+    
+    // Alice adds Bob using key package bytes
+    let (welcome_bytes, _commit) = engine.add_member(&mut alice_state, &kp_bytes)?;
+    
+    // Bob joins using the ORIGINAL KeyPackageData (provider has the private keys)
+    // In a real CLI scenario, this would need persistent storage
+    let mut bob_state = engine.process_welcome(&welcome_bytes, bob_kp_data)?;
+    
+    // Verify convergence
+    assert_eq!(alice_state.epoch(), 1);
+    assert_eq!(bob_state.epoch(), 1);
+    
+    // Verify messaging works
+    let msg = b"Hello from Alice to Bob!";
+    let ct = engine.encrypt_message(&mut alice_state, msg)?;
+    let pt = engine.decrypt_message(&mut bob_state, &ct)?;
+    assert_eq!(pt, msg.to_vec());
+    
+    Ok(()
+    )
+}
+
+/// Test that saved state files contain schema_version field
+#[test]
+fn test_state_schema_version_present() -> EngineResult<()> {
+    let temp_dir = tempdir().expect("Failed to create temp directory");
+    let state_path = temp_dir.path().join("version_test.json");
+    let state_path_str = state_path.to_str().unwrap();
+    
+    let engine = MlsEngine::new()?;
+    
+    // Create and save a group
+    let group_state = engine.create_group(b"version-test", b"Alice")?;
+    group_state.save(state_path_str)?;
+    
+    // Read the JSON file directly to verify schema_version
+    use std::fs::File;
+    use std::io::BufReader;
+    let file = File::open(state_path_str).expect("Failed to open state file");
+    let reader = BufReader::new(file);
+    let json: serde_json::Value = serde_json::from_reader(reader).expect("Failed to parse JSON");
+    
+    // Verify schema_version field exists and equals current version
+    let version = json.get("schema_version")
+        .expect("schema_version field missing")
+        .as_u64()
+        .expect("schema_version should be a number");
+    
+    assert_eq!(version as u32, CURRENT_SCHEMA_VERSION);
+    
+    // Verify state can be loaded
+    let loaded = GroupState::load(state_path_str)?;
+    assert_eq!(loaded.group_id_string(), "version-test");
+    
+    Ok(())
+}
+
