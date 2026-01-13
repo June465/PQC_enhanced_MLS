@@ -13,7 +13,7 @@ use crate::provider::{PqcKemProvider, HybridKemProvider};
 pub mod state;
 pub mod suite;
 
-pub use state::{GroupState, MemberIdentity, SerializedIdentity, SerializedPqcKeyPair};
+pub use state::{GroupState, MemberIdentity, SerializedIdentity, SerializedPqcKeyPair, SerializedKeyPackageData, CURRENT_SCHEMA_VERSION};
 pub use suite::CryptoSuite;
 
 use openmls::prelude::*;
@@ -33,6 +33,37 @@ pub struct KeyPackageData {
     pub suite: CryptoSuite,
     /// Optional PQC/Hybrid keypair for PQC-enhanced operations
     pub pqc_keypair: Option<SerializedPqcKeyPair>,
+}
+
+impl KeyPackageData {
+    /// Convert to serializable form for CLI persistence.
+    /// Note: key_package_bytes are NOT included - they're saved separately as the public .bin file.
+    pub fn to_serialized(&self) -> EngineResult<SerializedKeyPackageData> {
+        Ok(SerializedKeyPackageData {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            identity: self.identity.to_bytes()?,
+            suite: self.suite,
+            pqc_keypair: self.pqc_keypair.clone(),
+        })
+    }
+
+    /// Reconstruct from serialized form.
+    /// Creates a fresh provider and restores the identity and keys.
+    pub fn from_serialized(data: SerializedKeyPackageData) -> EngineResult<Self> {
+        let provider = OpenMlsRustCrypto::default();
+        let identity = MemberIdentity::from_serialized(data.identity)?;
+        
+        // Store the signature keys in the new provider
+        identity.store_keys(&provider)?;
+        
+        Ok(Self {
+            key_package_bytes: Vec::new(), // Not stored in serialized form
+            identity,
+            provider,
+            suite: data.suite,
+            pqc_keypair: data.pqc_keypair,
+        })
+    }
 }
 
 /// The MLS Engine handling group operations.
