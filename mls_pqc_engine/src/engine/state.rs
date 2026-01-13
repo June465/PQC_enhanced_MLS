@@ -15,6 +15,10 @@ use crate::error::{EngineError, EngineResult};
 use crate::provider::DEFAULT_CIPHERSUITE;
 use super::suite::CryptoSuite;
 
+/// Current schema version for state serialization.
+/// Increment when making breaking changes to state format.
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
 /// Member identity containing credentials and signing keys.
 pub struct MemberIdentity {
     /// The member's display name / identity bytes.
@@ -98,6 +102,50 @@ pub struct SerializedPqcKeyPair {
     pub public_key: Vec<u8>,
     /// Private key (PQC or Hybrid combined)
     pub private_key: Vec<u8>,
+}
+
+/// Serializable KeyPackageData for CLI persistence.
+/// Used to store the private key material needed for join-group operations.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SerializedKeyPackageData {
+    /// Schema version for future migrations.
+    pub schema_version: u32,
+    /// Serialized member identity with signature keys.
+    pub identity: SerializedIdentity,
+    /// The cryptographic suite in use.
+    pub suite: CryptoSuite,
+    /// Optional PQC/Hybrid keypair.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pqc_keypair: Option<SerializedPqcKeyPair>,
+}
+
+impl SerializedKeyPackageData {
+    /// Save to a JSON file.
+    pub fn save(&self, path: &str) -> EngineResult<()> {
+        let file = File::create(path)?;
+        let writer = BufWriter::new(file);
+        serde_json::to_writer_pretty(writer, self)
+            .map_err(|e| EngineError::Serialization(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Load from a JSON file.
+    pub fn load(path: &str) -> EngineResult<Self> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let data: Self = serde_json::from_reader(reader)
+            .map_err(|e| EngineError::Deserialization(e.to_string()))?;
+        
+        // Validate schema version
+        if data.schema_version > CURRENT_SCHEMA_VERSION {
+            return Err(EngineError::Deserialization(
+                format!("Unsupported schema version {} (max supported: {})",
+                    data.schema_version, CURRENT_SCHEMA_VERSION)
+            ));
+        }
+        
+        Ok(data)
+    }
 }
 
 /// Holds the runtime state of an MLS group.
@@ -228,6 +276,7 @@ impl GroupState {
     /// Saves group_id, identity, suite, and optional PQC keypair.
     pub fn save(&self, path: &str) -> EngineResult<()> {
         let snapshot = GroupStateSnapshot {
+            schema_version: CURRENT_SCHEMA_VERSION,
             group_id: self.group.group_id().as_slice().to_vec(),
             identity: self.identity.to_bytes()?,
             epoch: self.group.epoch().as_u64(),
@@ -252,6 +301,14 @@ impl GroupState {
         let snapshot: GroupStateSnapshot = serde_json::from_reader(reader)
             .map_err(|e| EngineError::Deserialization(e.to_string()))?;
 
+        // Validate schema version
+        if snapshot.schema_version > CURRENT_SCHEMA_VERSION {
+            return Err(EngineError::Deserialization(
+                format!("Unsupported state schema version {} (max supported: {})",
+                    snapshot.schema_version, CURRENT_SCHEMA_VERSION)
+            ));
+        }
+
         let identity = MemberIdentity::from_serialized(snapshot.identity)?;
         let suite = snapshot.suite;
         let pqc_keypair = snapshot.pqc_keypair;
@@ -271,9 +328,17 @@ impl GroupState {
     }
 }
 
+/// Default schema version for backward compatibility with old state files.
+fn default_schema_version() -> u32 {
+    1
+}
+
 /// Serializable snapshot of GroupState for persistence.
 #[derive(Serialize, Deserialize)]
 struct GroupStateSnapshot {
+    /// Schema version for future migrations.
+    #[serde(default = "default_schema_version")]
+    schema_version: u32,
     /// The group ID bytes.
     group_id: Vec<u8>,
     /// Serialized member identity.
