@@ -9,7 +9,7 @@ use std::io::Read;
 use serde::Serialize;
 
 // Import Engine and types
-use mls_pqc_engine::engine::{MlsEngine, CryptoSuite};
+use mls_pqc_engine::engine::{MlsEngine, CryptoSuite, KeyPackageData, SerializedKeyPackageData};
 use mls_pqc_engine::engine::state::GroupState;
 
 /// PQC-enhanced MLS protocol CLI
@@ -139,6 +139,25 @@ pub enum Commands {
         /// Output file path for the key package
         #[arg(long, short = 'o')]
         output: PathBuf,
+    },
+
+    /// Join an existing group using a Welcome message
+    JoinGroup {
+        /// Group identifier (for state file naming)
+        #[arg(long, short = 'g')]
+        group_id: String,
+
+        /// Identity of the joining member
+        #[arg(long, short = 'm')]
+        member_id: String,
+
+        /// Path to the Welcome message file
+        #[arg(long)]
+        welcome: PathBuf,
+
+        /// Path to the KeyPackageData JSON file
+        #[arg(long)]
+        key_package_data: PathBuf,
     },
 }
 
@@ -275,6 +294,93 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  }
                  Err(e) => print_error("decrypt", e),
              }
+        }
+
+        Commands::KeyPackage { member_id, output } => {
+            // Convert CLI suite to engine CryptoSuite
+            let crypto_suite: CryptoSuite = cli.suite.into();
+            
+            // Generate key package with specified suite
+            match engine.generate_key_package_with_suite(member_id.as_bytes(), crypto_suite) {
+                Ok(kp_data) => {
+                    // Write key package bytes to output file
+                    use std::io::Write;
+                    let mut file = File::create(&output)?;
+                    file.write_all(&kp_data.key_package_bytes)?;
+                    
+                    // Create companion _data.json file path
+                    let _data_path = output.with_extension("json");
+                    let data_path_str = if output.extension().is_some() {
+                        // If output has extension like .bin, make it .json
+                        let stem = output.file_stem().unwrap().to_str().unwrap();
+                        let parent = output.parent().unwrap_or(std::path::Path::new("."));
+                        parent.join(format!("{}_data.json", stem))
+                    } else {
+                        output.with_extension("_data.json")
+                    };
+                    
+                    // Serialize and save KeyPackageData
+                    let serialized = kp_data.to_serialized()
+                        .map_err(|e| format!("Failed to serialize key package data: {}", e))?;
+                    serialized.save(data_path_str.to_str().unwrap())
+                        .map_err(|e| format!("Failed to save key package data: {}", e))?;
+                    
+                    print_output(CommandOutput {
+                        command: "key-package".into(),
+                        status: "success".into(),
+                        suite: Some(crypto_suite.to_string()),
+                        group_id: None,
+                        message: Some(format!(
+                            "Key package saved to {:?}, data saved to {:?}",
+                            output, data_path_str
+                        )),
+                        result_data: Some(format!("Key package size: {} bytes", kp_data.key_package_bytes.len())),
+                        error: None,
+                    });
+                }
+                Err(e) => print_error("key-package", e),
+            }
+        }
+
+        Commands::JoinGroup { group_id, member_id: _, welcome, key_package_data } => {
+            // Load welcome bytes from file
+            let mut welcome_file = File::open(&welcome)?;
+            let mut welcome_bytes = Vec::new();
+            welcome_file.read_to_end(&mut welcome_bytes)?;
+            
+            // Load KeyPackageData from JSON
+            let serialized_kp_data = SerializedKeyPackageData::load(key_package_data.to_str().unwrap())
+                .map_err(|e| format!("Failed to load key package data: {}", e))?;
+            
+            // Reconstruct KeyPackageData
+            let kp_data = KeyPackageData::from_serialized(serialized_kp_data)
+                .map_err(|e| format!("Failed to reconstruct key package data: {}", e))?;
+            
+            let suite = kp_data.suite;
+            
+            // Process welcome message to join group
+            match engine.process_welcome(&welcome_bytes, kp_data) {
+                Ok(group_state) => {
+                    // Save state to state directory
+                    let member_state_path = cli.state_dir.join(format!("{}_{}.json", group_id, 
+                        String::from_utf8_lossy(&group_state.identity.name)));
+                    group_state.save(member_state_path.to_str().unwrap())?;
+                    
+                    print_output(CommandOutput {
+                        command: "join-group".into(),
+                        status: "success".into(),
+                        suite: Some(suite.to_string()),
+                        group_id: Some(group_id.clone()),
+                        message: Some(format!(
+                            "Joined group at epoch {}. State saved to {:?}",
+                            group_state.epoch(), member_state_path
+                        )),
+                        result_data: None,
+                        error: None,
+                    });
+                }
+                Err(e) => print_error("join-group", e),
+            }
         }
 
         _ => {
