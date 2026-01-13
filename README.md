@@ -11,7 +11,7 @@ This project provides a secure group messaging engine with support for:
 
 ## Project Status
 
-✅ **All Phases Complete** - The project is feature-complete with comprehensive test coverage.
+✅ **Phase 7 Complete** - Welcome/Join flow and state versioning implemented.
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -22,8 +22,13 @@ This project provides a secure group messaging engine with support for:
 | Phase 4 | Hybrid KEM (X25519 + ML-KEM) | ✅ Done |
 | Phase 5 | PQC/Hybrid Integration | ✅ Done |
 | Phase 6 | Security Tests | ✅ Done |
+| Phase 7 | Welcome/Join Flow + State Versioning | ✅ Done |
+| Phase 8 | Benchmark-Ready JSONL Metrics | ⏳ Pending |
+| Phase 9 | Deterministic Artifact Persistence | ⏳ Pending |
+| Phase 10 | CLI Completeness | ⏳ Pending |
+| Phase 11 | Documentation Polish | ⏳ Pending |
 
-**Test Coverage:** 57 tests covering correctness, negative cases, PQC integration, and security properties.
+**Test Coverage:** 60 tests covering correctness, negative cases, PQC integration, security properties, and join flow.
 
 
 ## Project Structure
@@ -89,11 +94,37 @@ cargo run -p mls_pqc_cli -- --suite hybrid-kem init-group -g "hybrid-secure" -m 
 cargo run -p mls_pqc_cli -- key-package -m "Bob" -o bob_kp.bin
 ```
 
+**Output:**
+```json
+{"command":"key-package","status":"success","suite":"classic","message":"Key package saved to \"bob_kp.bin\", data saved to \"bob_kp_data.json\""}
+```
+
+> **Note:** This creates two files:
+> - `bob_kp.bin` - The public key package (share with group creator)
+> - `bob_kp_data.json` - Private data needed for `join-group` (keep secure)
+
 #### Add Member to Group
 
 ```powershell
-# Add member using their key package
+# Add member using their key package (generates Welcome message)
 cargo run -p mls_pqc_cli -- add-member -g "my-group" -k bob_kp.bin
+```
+
+**Output:**
+```json
+{"command":"add-member","status":"success","suite":"classic","group_id":"my-group","message":"Member added","result_data":"Welcome size: 1234, Commit size: 567"}
+```
+
+#### Join Group (New Member)
+
+```powershell
+# Bob joins using Welcome message and his key package data
+cargo run -p mls_pqc_cli -- join-group -g "my-group" -m "Bob" --welcome welcome.bin --key-package-data bob_kp_data.json
+```
+
+**Output:**
+```json
+{"command":"join-group","status":"success","suite":"classic","group_id":"my-group","message":"Joined group at epoch 1. State saved to \".mls_state/my-group_Bob.json\""}
 ```
 
 #### Encrypt Message
