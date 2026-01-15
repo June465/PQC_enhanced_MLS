@@ -11,7 +11,7 @@ This project provides a secure group messaging engine with support for:
 
 ## Project Status
 
-✅ **Phase 7 Complete** - Welcome/Join flow and state versioning implemented.
+✅ **Phase 8 Complete** - Benchmark-ready JSONL metrics implemented.
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -23,12 +23,12 @@ This project provides a secure group messaging engine with support for:
 | Phase 5 | PQC/Hybrid Integration | ✅ Done |
 | Phase 6 | Security Tests | ✅ Done |
 | Phase 7 | Welcome/Join Flow + State Versioning | ✅ Done |
-| Phase 8 | Benchmark-Ready JSONL Metrics | ⏳ Pending |
+| Phase 8 | Benchmark-Ready JSONL Metrics | ✅ Done |
 | Phase 9 | Deterministic Artifact Persistence | ⏳ Pending |
 | Phase 10 | CLI Completeness | ⏳ Pending |
 | Phase 11 | Documentation Polish | ⏳ Pending |
 
-**Test Coverage:** 60 tests covering correctness, negative cases, PQC integration, security properties, and join flow.
+**Test Coverage:** 65 tests covering correctness, negative cases, PQC integration, security properties, join flow, and benchmark output.
 
 
 ## Project Structure
@@ -82,9 +82,9 @@ cargo run -p mls_pqc_cli -- --suite pqc-kem init-group -g "quantum-secure" -m "A
 cargo run -p mls_pqc_cli -- --suite hybrid-kem init-group -g "hybrid-secure" -m "Alice"
 ```
 
-**Output:**
+**Output (JSONL):**
 ```json
-{"command":"init-group","status":"success","suite":"pqc_kem","group_id":"quantum-secure","message":"Group created by Alice with Post-Quantum KEM (ML-KEM 768) suite"}
+{"schema_version":1,"ts_ms":1736930167000,"suite":"pqc_kem","op":"init_group","group_id":"quantum-secure","member_id":"Alice","group_size":1,"epoch_after":0,"ok":true,"time_ms":42}
 ```
 
 #### Generate Key Package
@@ -94,9 +94,9 @@ cargo run -p mls_pqc_cli -- --suite hybrid-kem init-group -g "hybrid-secure" -m 
 cargo run -p mls_pqc_cli -- key-package -m "Bob" -o bob_kp.bin
 ```
 
-**Output:**
+**Output (JSONL):**
 ```json
-{"command":"key-package","status":"success","suite":"classic","message":"Key package saved to \"bob_kp.bin\", data saved to \"bob_kp_data.json\""}
+{"schema_version":1,"ts_ms":1736930168000,"suite":"classic","op":"key_package","member_id":"Bob","ok":true,"time_ms":15,"artifact_bytes":{"key_package":625}}
 ```
 
 > **Note:** This creates two files:
@@ -110,9 +110,9 @@ cargo run -p mls_pqc_cli -- key-package -m "Bob" -o bob_kp.bin
 cargo run -p mls_pqc_cli -- add-member -g "my-group" -k bob_kp.bin
 ```
 
-**Output:**
+**Output (JSONL):**
 ```json
-{"command":"add-member","status":"success","suite":"classic","group_id":"my-group","message":"Member added","result_data":"Welcome size: 1234, Commit size: 567"}
+{"schema_version":1,"ts_ms":1736930169000,"suite":"classic","op":"add_member","group_id":"my-group","group_size":2,"epoch_before":0,"epoch_after":1,"ok":true,"time_ms":35,"bytes_in":625,"artifact_bytes":{"welcome":1234,"commit":567}}
 ```
 
 #### Join Group (New Member)
@@ -122,9 +122,9 @@ cargo run -p mls_pqc_cli -- add-member -g "my-group" -k bob_kp.bin
 cargo run -p mls_pqc_cli -- join-group -g "my-group" -m "Bob" --welcome welcome.bin --key-package-data bob_kp_data.json
 ```
 
-**Output:**
+**Output (JSONL):**
 ```json
-{"command":"join-group","status":"success","suite":"classic","group_id":"my-group","message":"Joined group at epoch 1. State saved to \".mls_state/my-group_Bob.json\""}
+{"schema_version":1,"ts_ms":1736930170000,"suite":"classic","op":"join_group","group_id":"my-group","member_id":"Bob","group_size":2,"epoch_after":1,"ok":true,"time_ms":28,"bytes_in":1234}
 ```
 
 #### Encrypt Message
@@ -134,10 +134,12 @@ cargo run -p mls_pqc_cli -- join-group -g "my-group" -m "Bob" --welcome welcome.
 cargo run -p mls_pqc_cli -- encrypt -g "my-group" -p "Hello, secure world!"
 ```
 
-**Output:**
+**Output (JSONL):**
 ```json
-{"command":"encrypt","status":"success","suite":"pqc_kem","group_id":"my-group","result_data":"<base64-encoded-ciphertext>"}
+{"schema_version":1,"ts_ms":1736930171000,"suite":"pqc_kem","op":"encrypt","group_id":"my-group","group_size":2,"epoch_before":1,"epoch_after":1,"ok":true,"time_ms":5,"bytes_in":20,"bytes_out":1280,"artifact_bytes":{"ciphertext":1280}}
 ```
+
+> **Note:** The ciphertext is output to stderr while JSONL metrics go to stdout for easy parsing.
 
 #### Decrypt Message
 
@@ -170,21 +172,22 @@ Alice wants to create a quantum-resistant secure group and add Bob. They will th
 
 cargo run -p mls_pqc_cli -- --suite hybrid-kem init-group -g "project-alpha" -m "Alice"
 
-# Output:
-# {"command":"init-group","status":"success","suite":"hybrid_kem","group_id":"project-alpha",
-#  "message":"Group created by Alice with Hybrid KEM (X25519 + ML-KEM 768) suite"}
+# Output (JSONL):
+# {"schema_version":1,"ts_ms":1736930167000,"suite":"hybrid_kem","op":"init_group",
+#  "group_id":"project-alpha","member_id":"Alice","group_size":1,"epoch_after":0,
+#  "ok":true,"time_ms":42}
 
 # ============================================
 # STEP 2: Bob generates his key package
 # ============================================
 # A key package contains Bob's public keys for joining groups
-# This is saved to a file that Alice will use to add him
+# Creates bob_keypackage.bin (public) and bob_keypackage_data.json (private)
 
 cargo run -p mls_pqc_cli -- --suite hybrid-kem key-package -m "Bob" -o bob_keypackage.bin
 
-# Output:
-# {"command":"key-package","status":"success","suite":"hybrid_kem","member_id":"Bob"}
-# Key package saved to: bob_keypackage.bin
+# Output (JSONL):
+# {"schema_version":1,"ts_ms":1736930168000,"suite":"hybrid_kem","op":"key_package",
+#  "member_id":"Bob","ok":true,"time_ms":15,"artifact_bytes":{"key_package":2100}}
 
 # ============================================
 # STEP 3: Alice adds Bob to the group
@@ -194,9 +197,10 @@ cargo run -p mls_pqc_cli -- --suite hybrid-kem key-package -m "Bob" -o bob_keypa
 
 cargo run -p mls_pqc_cli -- add-member -g "project-alpha" -k bob_keypackage.bin
 
-# Output:
-# {"command":"add-member","status":"success","suite":"hybrid_kem","group_id":"project-alpha",
-#  "message":"Member added successfully. Welcome saved."}
+# Output (JSONL):
+# {"schema_version":1,"ts_ms":1736930169000,"suite":"hybrid_kem","op":"add_member",
+#  "group_id":"project-alpha","group_size":2,"epoch_before":0,"epoch_after":1,
+#  "ok":true,"time_ms":35,"bytes_in":2100,"artifact_bytes":{"welcome":4500,"commit":890}}
 
 # ============================================
 # STEP 4: Alice sends an encrypted message
@@ -206,9 +210,11 @@ cargo run -p mls_pqc_cli -- add-member -g "project-alpha" -k bob_keypackage.bin
 
 cargo run -p mls_pqc_cli -- encrypt -g "project-alpha" -p "Meeting at 3pm in the secure room"
 
-# Output:
-# {"command":"encrypt","status":"success","suite":"hybrid_kem","group_id":"project-alpha",
-#  "result_data":"<base64-encoded-ciphertext>"}
+# Ciphertext output to stderr: <base64-encoded-ciphertext>
+# JSONL output to stdout:
+# {"schema_version":1,"ts_ms":1736930170000,"suite":"hybrid_kem","op":"encrypt",
+#  "group_id":"project-alpha","group_size":2,"epoch_before":1,"epoch_after":1,
+#  "ok":true,"time_ms":5,"bytes_in":34,"bytes_out":1450,"artifact_bytes":{"ciphertext":1450}}
 
 # ============================================
 # STEP 5: Bob decrypts the message
@@ -218,9 +224,11 @@ cargo run -p mls_pqc_cli -- encrypt -g "project-alpha" -p "Meeting at 3pm in the
 
 cargo run -p mls_pqc_cli -- decrypt -g "project-alpha" -c "<base64-ciphertext>"
 
-# Output:
-# {"command":"decrypt","status":"success","suite":"hybrid_kem","group_id":"project-alpha",
-#  "message":"Meeting at 3pm in the secure room"}
+# Plaintext output to stderr: Meeting at 3pm in the secure room
+# JSONL output to stdout:
+# {"schema_version":1,"ts_ms":1736930171000,"suite":"hybrid_kem","op":"decrypt",
+#  "group_id":"project-alpha","group_size":2,"epoch_before":1,"epoch_after":1,
+#  "ok":true,"time_ms":3,"bytes_in":1450,"bytes_out":34}
 ```
 
 #### Understanding the Workflow
