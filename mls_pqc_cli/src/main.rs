@@ -1,12 +1,16 @@
 //! # MLS PQC CLI
 //!
 //! Command-line interface for PQC-enhanced MLS protocol operations.
+//! Outputs benchmark-ready JSONL metrics for all operations.
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::fs::File;
 use std::io::Read;
-use serde::Serialize;
+use std::time::Instant;
+
+mod output;
+use output::{BenchmarkOutput, ArtifactBytes};
 
 // Import Engine and types
 use mls_pqc_engine::engine::{MlsEngine, CryptoSuite, KeyPackageData, SerializedKeyPackageData};
@@ -161,25 +165,10 @@ pub enum Commands {
     },
 }
 
-#[derive(Serialize)]
-struct CommandOutput {
-    command: String,
-    status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    suite: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    group_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result_data: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let engine = MlsEngine::new()?;
+    let suite_str = format!("{:?}", cli.suite).to_lowercase();
 
     // Ensure state dir exists
     if !cli.state_dir.exists() {
@@ -188,130 +177,274 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match &cli.command {
         Commands::InitGroup { group_id, member_id } => {
-            // Convert CLI suite to engine CryptoSuite
+            let start = Instant::now();
             let crypto_suite: CryptoSuite = cli.suite.into();
             
-            // Create group with specified suite
-            let group_state = engine.create_group_with_suite(
+            match engine.create_group_with_suite(
                 group_id.as_bytes(),
                 member_id.as_bytes(),
                 crypto_suite,
-            )?;
-            
-            // Save state
-            let path = cli.state_dir.join(format!("{}.json", group_id));
-            group_state.save(path.to_str().unwrap())?;
-            
-            print_output(CommandOutput {
-                command: "init-group".into(),
-                status: "success".into(),
-                suite: Some(crypto_suite.to_string()),
-                group_id: Some(group_id.clone()),
-                message: Some(format!("Group created by {} with {} suite", member_id, crypto_suite.description())),
-                result_data: None,
-                error: None,
-            });
+            ) {
+                Ok(group_state) => {
+                    let path = cli.state_dir.join(format!("{}.json", group_id));
+                    if let Err(e) = group_state.save(path.to_str().unwrap()) {
+                        BenchmarkOutput::error("init_group", &suite_str, &e.to_string(), start)
+                            .with_group_id(group_id)
+                            .with_member_id(member_id)
+                            .print();
+                        return Ok(());
+                    }
+                    
+                    let group_size = group_state.group.members().count() as u32;
+                    BenchmarkOutput::new("init_group", &suite_str)
+                        .with_group_id(group_id)
+                        .with_member_id(member_id)
+                        .with_group_size(group_size)
+                        .with_epoch_after(group_state.epoch())
+                        .with_timing(start)
+                        .print();
+                }
+                Err(e) => {
+                    BenchmarkOutput::error("init_group", &suite_str, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .with_member_id(member_id)
+                        .print();
+                }
+            }
         }
         
         Commands::AddMember { group_id, key_package } => {
+            let start = Instant::now();
             let path = cli.state_dir.join(format!("{}.json", group_id));
-            let mut group_state = GroupState::load(path.to_str().unwrap())?;
+            
+            // Load group state
+            let mut group_state = match GroupState::load(path.to_str().unwrap()) {
+                Ok(state) => state,
+                Err(e) => {
+                    BenchmarkOutput::error("add_member", &suite_str, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .print();
+                    return Ok(());
+                }
+            };
+            
+            let epoch_before = group_state.epoch();
+            let suite_actual = group_state.suite.to_string();
             
             // Read key package from file
-            let mut file = File::open(key_package)?;
+            let mut file = match File::open(key_package) {
+                Ok(f) => f,
+                Err(e) => {
+                    BenchmarkOutput::error("add_member", &suite_actual, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .with_epoch_before(epoch_before)
+                        .print();
+                    return Ok(());
+                }
+            };
             let mut kp_bytes = Vec::new();
-            file.read_to_end(&mut kp_bytes)?;
+            if let Err(e) = file.read_to_end(&mut kp_bytes) {
+                BenchmarkOutput::error("add_member", &suite_actual, &e.to_string(), start)
+                    .with_group_id(group_id)
+                    .with_epoch_before(epoch_before)
+                    .print();
+                return Ok(());
+            }
+            
+            let bytes_in = kp_bytes.len() as u64;
             
             match engine.add_member(&mut group_state, &kp_bytes) {
                 Ok((welcome, commit)) => {
-                    // Update state file
-                     group_state.save(path.to_str().unwrap())?;
-                     
-                     // In real CLI we might output welcome/commit to files.
-                     // Here we just indicate success.
-                     print_output(CommandOutput {
-                        command: "add-member".into(),
-                        status: "success".into(),
-                        suite: Some(group_state.suite.to_string()),
-                        group_id: Some(group_id.clone()),
-                        message: Some("Member added".into()),
-                        result_data: Some(format!("Welcome size: {}, Commit size: {}", welcome.len(), commit.len())),
-                        error: None,
-                    });
+                    if let Err(e) = group_state.save(path.to_str().unwrap()) {
+                        BenchmarkOutput::error("add_member", &suite_actual, &e.to_string(), start)
+                            .with_group_id(group_id)
+                            .with_epoch_before(epoch_before)
+                            .print();
+                        return Ok(());
+                    }
+                    
+                    let group_size = group_state.group.members().count() as u32;
+                    let artifacts = ArtifactBytes {
+                        welcome: Some(welcome.len() as u64),
+                        commit: Some(commit.len() as u64),
+                        ..Default::default()
+                    };
+                    
+                    BenchmarkOutput::new("add_member", &suite_actual)
+                        .with_group_id(group_id)
+                        .with_group_size(group_size)
+                        .with_epoch_before(epoch_before)
+                        .with_epoch_after(group_state.epoch())
+                        .with_bytes_in(bytes_in)
+                        .with_artifact_bytes(artifacts)
+                        .with_timing(start)
+                        .print();
                 }
-                Err(e) => print_error("add-member", e),
+                Err(e) => {
+                    BenchmarkOutput::error("add_member", &suite_actual, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .with_epoch_before(epoch_before)
+                        .print();
+                }
             }
         }
         
         Commands::Encrypt { group_id, plaintext } => {
-             let path = cli.state_dir.join(format!("{}.json", group_id));
-             let mut group_state = GroupState::load(path.to_str().unwrap())?;
-             
-             match engine.encrypt_message(&mut group_state, plaintext.as_bytes()) {
-                 Ok(ciphertext) => {
-                     // TODO: State update if encryption rolls ratchet? 
-                     // Usually encryption advances application ratchet but checks if it needs to save?
-                     // Usually application secret needs saving.
-                     group_state.save(path.to_str().unwrap())?;
-                     
-                     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-                     let ct_b64 = BASE64.encode(&ciphertext);
-                     
-                     print_output(CommandOutput {
-                        command: "encrypt".into(),
-                        status: "success".into(),
-                        suite: Some(group_state.suite.to_string()),
-                        group_id: Some(group_id.clone()),
-                        message: None,
-                        result_data: Some(ct_b64),
-                        error: None,
-                    });
-                 }
-                 Err(e) => print_error("encrypt", e),
-             }
+            let start = Instant::now();
+            let path = cli.state_dir.join(format!("{}.json", group_id));
+            
+            let mut group_state = match GroupState::load(path.to_str().unwrap()) {
+                Ok(state) => state,
+                Err(e) => {
+                    BenchmarkOutput::error("encrypt", &suite_str, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .print();
+                    return Ok(());
+                }
+            };
+            
+            let epoch_before = group_state.epoch();
+            let suite_actual = group_state.suite.to_string();
+            let bytes_in = plaintext.len() as u64;
+            
+            match engine.encrypt_message(&mut group_state, plaintext.as_bytes()) {
+                Ok(ciphertext) => {
+                    if let Err(e) = group_state.save(path.to_str().unwrap()) {
+                        BenchmarkOutput::error("encrypt", &suite_actual, &e.to_string(), start)
+                            .with_group_id(group_id)
+                            .with_epoch_before(epoch_before)
+                            .print();
+                        return Ok(());
+                    }
+                    
+                    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+                    let ct_b64 = BASE64.encode(&ciphertext);
+                    
+                    let group_size = group_state.group.members().count() as u32;
+                    let bytes_out = ciphertext.len() as u64;
+                    let artifacts = ArtifactBytes {
+                        ciphertext: Some(bytes_out),
+                        ..Default::default()
+                    };
+                    
+                    // Output the ciphertext to stderr so stdout has only JSONL
+                    eprintln!("{}", ct_b64);
+                    
+                    BenchmarkOutput::new("encrypt", &suite_actual)
+                        .with_group_id(group_id)
+                        .with_group_size(group_size)
+                        .with_epoch_before(epoch_before)
+                        .with_epoch_after(group_state.epoch())
+                        .with_bytes_in(bytes_in)
+                        .with_bytes_out(bytes_out)
+                        .with_artifact_bytes(artifacts)
+                        .with_timing(start)
+                        .print();
+                }
+                Err(e) => {
+                    BenchmarkOutput::error("encrypt", &suite_actual, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .with_epoch_before(epoch_before)
+                        .print();
+                }
+            }
         }
         
         Commands::Decrypt { group_id, ciphertext } => {
-             let path = cli.state_dir.join(format!("{}.json", group_id));
-             let mut group_state = GroupState::load(path.to_str().unwrap())?;
-             
-             use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-             let ct_bytes = BASE64.decode(ciphertext).map_err(|e| format!("Base64 error: {}", e))?; // Simple error mapping
-             
-             match engine.decrypt_message(&mut group_state, &ct_bytes) {
-                 Ok(pt_bytes) => {
-                     group_state.save(path.to_str().unwrap())?;
-                     let pt = String::from_utf8_lossy(&pt_bytes).to_string();
-                      print_output(CommandOutput {
-                        command: "decrypt".into(),
-                        status: "success".into(),
-                        suite: Some(group_state.suite.to_string()),
-                        group_id: Some(group_id.clone()),
-                        message: None,
-                        result_data: Some(pt),
-                        error: None,
-                    });
-                 }
-                 Err(e) => print_error("decrypt", e),
-             }
+            let start = Instant::now();
+            let path = cli.state_dir.join(format!("{}.json", group_id));
+            
+            let mut group_state = match GroupState::load(path.to_str().unwrap()) {
+                Ok(state) => state,
+                Err(e) => {
+                    BenchmarkOutput::error("decrypt", &suite_str, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .print();
+                    return Ok(());
+                }
+            };
+            
+            let epoch_before = group_state.epoch();
+            let suite_actual = group_state.suite.to_string();
+            
+            use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+            let ct_bytes = match BASE64.decode(ciphertext) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    BenchmarkOutput::error("decrypt", &suite_actual, &format!("Base64 error: {}", e), start)
+                        .with_group_id(group_id)
+                        .with_epoch_before(epoch_before)
+                        .print();
+                    return Ok(());
+                }
+            };
+            
+            let bytes_in = ct_bytes.len() as u64;
+            
+            match engine.decrypt_message(&mut group_state, &ct_bytes) {
+                Ok(pt_bytes) => {
+                    if let Err(e) = group_state.save(path.to_str().unwrap()) {
+                        BenchmarkOutput::error("decrypt", &suite_actual, &e.to_string(), start)
+                            .with_group_id(group_id)
+                            .with_epoch_before(epoch_before)
+                            .print();
+                        return Ok(());
+                    }
+                    
+                    let pt = String::from_utf8_lossy(&pt_bytes).to_string();
+                    let bytes_out = pt_bytes.len() as u64;
+                    let group_size = group_state.group.members().count() as u32;
+                    
+                    // Output plaintext to stderr so stdout has only JSONL
+                    eprintln!("{}", pt);
+                    
+                    BenchmarkOutput::new("decrypt", &suite_actual)
+                        .with_group_id(group_id)
+                        .with_group_size(group_size)
+                        .with_epoch_before(epoch_before)
+                        .with_epoch_after(group_state.epoch())
+                        .with_bytes_in(bytes_in)
+                        .with_bytes_out(bytes_out)
+                        .with_timing(start)
+                        .print();
+                }
+                Err(e) => {
+                    BenchmarkOutput::error("decrypt", &suite_actual, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .with_epoch_before(epoch_before)
+                        .print();
+                }
+            }
         }
 
         Commands::KeyPackage { member_id, output } => {
-            // Convert CLI suite to engine CryptoSuite
+            let start = Instant::now();
             let crypto_suite: CryptoSuite = cli.suite.into();
             
-            // Generate key package with specified suite
             match engine.generate_key_package_with_suite(member_id.as_bytes(), crypto_suite) {
                 Ok(kp_data) => {
-                    // Write key package bytes to output file
                     use std::io::Write;
-                    let mut file = File::create(&output)?;
-                    file.write_all(&kp_data.key_package_bytes)?;
+                    
+                    // Write key package bytes to output file
+                    let mut file = match File::create(&output) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            BenchmarkOutput::error("key_package", &suite_str, &e.to_string(), start)
+                                .with_member_id(member_id)
+                                .print();
+                            return Ok(());
+                        }
+                    };
+                    
+                    if let Err(e) = file.write_all(&kp_data.key_package_bytes) {
+                        BenchmarkOutput::error("key_package", &suite_str, &e.to_string(), start)
+                            .with_member_id(member_id)
+                            .print();
+                        return Ok(());
+                    }
                     
                     // Create companion _data.json file path
-                    let _data_path = output.with_extension("json");
                     let data_path_str = if output.extension().is_some() {
-                        // If output has extension like .bin, make it .json
                         let stem = output.file_stem().unwrap().to_str().unwrap();
                         let parent = output.parent().unwrap_or(std::path::Path::new("."));
                         parent.join(format!("{}_data.json", stem))
@@ -320,93 +453,135 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
                     
                     // Serialize and save KeyPackageData
-                    let serialized = kp_data.to_serialized()
-                        .map_err(|e| format!("Failed to serialize key package data: {}", e))?;
-                    serialized.save(data_path_str.to_str().unwrap())
-                        .map_err(|e| format!("Failed to save key package data: {}", e))?;
+                    let serialized = match kp_data.to_serialized() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            BenchmarkOutput::error("key_package", &suite_str, &format!("Failed to serialize: {}", e), start)
+                                .with_member_id(member_id)
+                                .print();
+                            return Ok(());
+                        }
+                    };
                     
-                    print_output(CommandOutput {
-                        command: "key-package".into(),
-                        status: "success".into(),
-                        suite: Some(crypto_suite.to_string()),
-                        group_id: None,
-                        message: Some(format!(
-                            "Key package saved to {:?}, data saved to {:?}",
-                            output, data_path_str
-                        )),
-                        result_data: Some(format!("Key package size: {} bytes", kp_data.key_package_bytes.len())),
-                        error: None,
-                    });
+                    if let Err(e) = serialized.save(data_path_str.to_str().unwrap()) {
+                        BenchmarkOutput::error("key_package", &suite_str, &format!("Failed to save data: {}", e), start)
+                            .with_member_id(member_id)
+                            .print();
+                        return Ok(());
+                    }
+                    
+                    let kp_size = kp_data.key_package_bytes.len() as u64;
+                    let artifacts = ArtifactBytes {
+                        key_package: Some(kp_size),
+                        ..Default::default()
+                    };
+                    
+                    BenchmarkOutput::new("key_package", &suite_str)
+                        .with_member_id(member_id)
+                        .with_artifact_bytes(artifacts)
+                        .with_timing(start)
+                        .print();
                 }
-                Err(e) => print_error("key-package", e),
+                Err(e) => {
+                    BenchmarkOutput::error("key_package", &suite_str, &e.to_string(), start)
+                        .with_member_id(member_id)
+                        .print();
+                }
             }
         }
 
-        Commands::JoinGroup { group_id, member_id: _, welcome, key_package_data } => {
+        Commands::JoinGroup { group_id, member_id, welcome, key_package_data } => {
+            let start = Instant::now();
+            
             // Load welcome bytes from file
-            let mut welcome_file = File::open(&welcome)?;
+            let mut welcome_file = match File::open(&welcome) {
+                Ok(f) => f,
+                Err(e) => {
+                    BenchmarkOutput::error("join_group", &suite_str, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .with_member_id(member_id)
+                        .print();
+                    return Ok(());
+                }
+            };
             let mut welcome_bytes = Vec::new();
-            welcome_file.read_to_end(&mut welcome_bytes)?;
+            if let Err(e) = welcome_file.read_to_end(&mut welcome_bytes) {
+                BenchmarkOutput::error("join_group", &suite_str, &e.to_string(), start)
+                    .with_group_id(group_id)
+                    .with_member_id(member_id)
+                    .print();
+                return Ok(());
+            }
+            
+            let bytes_in = welcome_bytes.len() as u64;
             
             // Load KeyPackageData from JSON
-            let serialized_kp_data = SerializedKeyPackageData::load(key_package_data.to_str().unwrap())
-                .map_err(|e| format!("Failed to load key package data: {}", e))?;
+            let serialized_kp_data = match SerializedKeyPackageData::load(key_package_data.to_str().unwrap()) {
+                Ok(data) => data,
+                Err(e) => {
+                    BenchmarkOutput::error("join_group", &suite_str, &format!("Failed to load key package data: {}", e), start)
+                        .with_group_id(group_id)
+                        .with_member_id(member_id)
+                        .print();
+                    return Ok(());
+                }
+            };
             
             // Reconstruct KeyPackageData
-            let kp_data = KeyPackageData::from_serialized(serialized_kp_data)
-                .map_err(|e| format!("Failed to reconstruct key package data: {}", e))?;
+            let kp_data = match KeyPackageData::from_serialized(serialized_kp_data) {
+                Ok(data) => data,
+                Err(e) => {
+                    BenchmarkOutput::error("join_group", &suite_str, &format!("Failed to reconstruct key package data: {}", e), start)
+                        .with_group_id(group_id)
+                        .with_member_id(member_id)
+                        .print();
+                    return Ok(());
+                }
+            };
             
             let suite = kp_data.suite;
+            let suite_actual = suite.to_string();
             
             // Process welcome message to join group
             match engine.process_welcome(&welcome_bytes, kp_data) {
                 Ok(group_state) => {
-                    // Save state to state directory
                     let member_state_path = cli.state_dir.join(format!("{}_{}.json", group_id, 
                         String::from_utf8_lossy(&group_state.identity.name)));
-                    group_state.save(member_state_path.to_str().unwrap())?;
                     
-                    print_output(CommandOutput {
-                        command: "join-group".into(),
-                        status: "success".into(),
-                        suite: Some(suite.to_string()),
-                        group_id: Some(group_id.clone()),
-                        message: Some(format!(
-                            "Joined group at epoch {}. State saved to {:?}",
-                            group_state.epoch(), member_state_path
-                        )),
-                        result_data: None,
-                        error: None,
-                    });
+                    if let Err(e) = group_state.save(member_state_path.to_str().unwrap()) {
+                        BenchmarkOutput::error("join_group", &suite_actual, &e.to_string(), start)
+                            .with_group_id(group_id)
+                            .with_member_id(member_id)
+                            .print();
+                        return Ok(());
+                    }
+                    
+                    let group_size = group_state.group.members().count() as u32;
+                    
+                    BenchmarkOutput::new("join_group", &suite_actual)
+                        .with_group_id(group_id)
+                        .with_member_id(member_id)
+                        .with_group_size(group_size)
+                        .with_epoch_after(group_state.epoch())
+                        .with_bytes_in(bytes_in)
+                        .with_timing(start)
+                        .print();
                 }
-                Err(e) => print_error("join-group", e),
+                Err(e) => {
+                    BenchmarkOutput::error("join_group", &suite_actual, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .with_member_id(member_id)
+                        .print();
+                }
             }
         }
 
         _ => {
-            println!(
-                "{{\"command\": \"unknown\", \"status\": \"not_implemented\", \"message\": \"Command not yet fully wired\"}}"
-            );
+            let start = Instant::now();
+            BenchmarkOutput::error("unknown", &suite_str, "Command not yet implemented", start)
+                .print();
         }
     }
 
     Ok(())
-}
-
-fn print_output(output: CommandOutput) {
-    let json = serde_json::to_string(&output).unwrap();
-    println!("{}", json);
-}
-
-fn print_error(cmd: &str, e: impl std::fmt::Display) {
-    let output = CommandOutput {
-        command: cmd.into(),
-        status: "error".into(),
-        suite: None,
-        group_id: None,
-        message: None,
-        result_data: None,
-        error: Some(e.to_string()),
-    };
-    print_output(output);
 }
