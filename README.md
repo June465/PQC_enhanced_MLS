@@ -11,7 +11,7 @@ This project provides a secure group messaging engine with support for:
 
 ## Project Status
 
-✅ **Phase 8 Complete** - Benchmark-ready JSONL metrics implemented.
+✅ **Phase 9 Complete** - Deterministic artifact persistence implemented.
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -24,11 +24,11 @@ This project provides a secure group messaging engine with support for:
 | Phase 6 | Security Tests | ✅ Done |
 | Phase 7 | Welcome/Join Flow + State Versioning | ✅ Done |
 | Phase 8 | Benchmark-Ready JSONL Metrics | ✅ Done |
-| Phase 9 | Deterministic Artifact Persistence | ⏳ Pending |
+| Phase 9 | Deterministic Artifact Persistence | ✅ Done |
 | Phase 10 | CLI Completeness | ⏳ Pending |
 | Phase 11 | Documentation Polish | ⏳ Pending |
 
-**Test Coverage:** 65 tests covering correctness, negative cases, PQC integration, security properties, join flow, and benchmark output.
+**Test Coverage:** 76 tests covering correctness, negative cases, PQC integration, security properties, join flow, benchmark output, and artifact persistence.
 
 
 ## Project Structure
@@ -155,6 +155,7 @@ cargo run -p mls_pqc_cli -- decrypt -g "my-group" -c "<base64-ciphertext>"
 | `--suite` | `-s` | Crypto suite | `classic` |
 | `--state-dir` | `-d` | State directory | `.mls_state` |
 | `--output-format` | `-o` | Output format | `jsonl` |
+| `--run-id` | | Experiment isolation ID | None |
 
 ### Complete Workflow Example: Secure Team Communication
 
