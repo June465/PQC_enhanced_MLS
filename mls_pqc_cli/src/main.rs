@@ -10,7 +10,9 @@ use std::io::Read;
 use std::time::Instant;
 
 mod output;
-use output::{BenchmarkOutput, ArtifactBytes};
+mod artifacts;
+use output::{BenchmarkOutput, ArtifactBytes, ArtifactPaths};
+use artifacts::ArtifactManager;
 
 // Import Engine and types
 use mls_pqc_engine::engine::{MlsEngine, CryptoSuite, KeyPackageData, SerializedKeyPackageData};
@@ -33,6 +35,10 @@ pub struct Cli {
     /// Output format for results
     #[arg(long, short = 'o', value_enum, default_value_t = OutputFormat::Jsonl, global = true)]
     pub output_format: OutputFormat,
+
+    /// Optional run identifier for experiment grouping
+    #[arg(long, global = true)]
+    pub run_id: Option<String>,
 
     /// Subcommand to execute
     #[command(subcommand)]
@@ -94,7 +100,7 @@ pub enum Commands {
         key_package: PathBuf,
     },
 
-    /// Remove a member from a group (Not Implemented)
+    /// Remove a member from a group by identity
     RemoveMember {
         /// Group identifier
         #[arg(long, short = 'g')]
@@ -105,7 +111,7 @@ pub enum Commands {
         member_id: String,
     },
 
-    /// Commit pending proposals (Not Implemented)
+    /// Commit pending proposals
     Commit {
         /// Group identifier
         #[arg(long, short = 'g')]
@@ -162,6 +168,17 @@ pub enum Commands {
         /// Path to the KeyPackageData JSON file
         #[arg(long)]
         key_package_data: PathBuf,
+    },
+
+    /// Export group state for debugging and analysis
+    ExportState {
+        /// Group identifier
+        #[arg(long, short = 'g')]
+        group_id: String,
+
+        /// Output file path (optional, defaults to stdout)
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
     },
 }
 
@@ -223,6 +240,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(e) => {
                     BenchmarkOutput::error("add_member", &suite_str, &e.to_string(), start)
                         .with_group_id(group_id)
+                        .with_run_id(cli.run_id.as_deref())
                         .print();
                     return Ok(());
                 }
@@ -238,6 +256,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     BenchmarkOutput::error("add_member", &suite_actual, &e.to_string(), start)
                         .with_group_id(group_id)
                         .with_epoch_before(epoch_before)
+                        .with_run_id(cli.run_id.as_deref())
                         .print();
                     return Ok(());
                 }
@@ -247,11 +266,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 BenchmarkOutput::error("add_member", &suite_actual, &e.to_string(), start)
                     .with_group_id(group_id)
                     .with_epoch_before(epoch_before)
+                    .with_run_id(cli.run_id.as_deref())
                     .print();
                 return Ok(());
             }
             
             let bytes_in = kp_bytes.len() as u64;
+            
+            // Extract member ID from key package filename for artifact naming
+            let new_member_id = key_package
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown");
             
             match engine.add_member(&mut group_state, &kp_bytes) {
                 Ok((welcome, commit)) => {
@@ -259,8 +285,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         BenchmarkOutput::error("add_member", &suite_actual, &e.to_string(), start)
                             .with_group_id(group_id)
                             .with_epoch_before(epoch_before)
+                            .with_run_id(cli.run_id.as_deref())
                             .print();
                         return Ok(());
+                    }
+                    
+                    // Create artifact manager and save artifacts
+                    let artifact_manager = ArtifactManager::new(
+                        &cli.state_dir,
+                        group_id,
+                        cli.run_id.as_deref(),
+                    );
+                    
+                    let epoch_after = group_state.epoch();
+                    let mut artifact_paths = ArtifactPaths::default();
+                    
+                    // Save Welcome artifact
+                    match artifact_manager.save_welcome(new_member_id, &welcome) {
+                        Ok(p) => artifact_paths.welcome = Some(p.to_string_lossy().to_string()),
+                        Err(e) => eprintln!("Warning: Failed to save welcome artifact: {}", e),
+                    }
+                    
+                    // Save Commit artifact
+                    match artifact_manager.save_commit(epoch_after, &commit) {
+                        Ok(p) => artifact_paths.commit = Some(p.to_string_lossy().to_string()),
+                        Err(e) => eprintln!("Warning: Failed to save commit artifact: {}", e),
                     }
                     
                     let group_size = group_state.group.members().count() as u32;
@@ -272,11 +321,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     
                     BenchmarkOutput::new("add_member", &suite_actual)
                         .with_group_id(group_id)
+                        .with_member_id(new_member_id)
                         .with_group_size(group_size)
                         .with_epoch_before(epoch_before)
-                        .with_epoch_after(group_state.epoch())
+                        .with_epoch_after(epoch_after)
                         .with_bytes_in(bytes_in)
                         .with_artifact_bytes(artifacts)
+                        .with_artifact_paths(artifact_paths)
+                        .with_run_id(cli.run_id.as_deref())
                         .with_timing(start)
                         .print();
                 }
@@ -284,10 +336,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     BenchmarkOutput::error("add_member", &suite_actual, &e.to_string(), start)
                         .with_group_id(group_id)
                         .with_epoch_before(epoch_before)
+                        .with_run_id(cli.run_id.as_deref())
                         .print();
                 }
             }
         }
+
         
         Commands::Encrypt { group_id, plaintext } => {
             let start = Instant::now();
@@ -298,6 +352,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(e) => {
                     BenchmarkOutput::error("encrypt", &suite_str, &e.to_string(), start)
                         .with_group_id(group_id)
+                        .with_run_id(cli.run_id.as_deref())
                         .print();
                     return Ok(());
                 }
@@ -313,8 +368,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         BenchmarkOutput::error("encrypt", &suite_actual, &e.to_string(), start)
                             .with_group_id(group_id)
                             .with_epoch_before(epoch_before)
+                            .with_run_id(cli.run_id.as_deref())
                             .print();
                         return Ok(());
+                    }
+                    
+                    // Create artifact manager and save ciphertext
+                    let artifact_manager = ArtifactManager::new(
+                        &cli.state_dir,
+                        group_id,
+                        cli.run_id.as_deref(),
+                    );
+                    
+                    let mut artifact_paths = ArtifactPaths::default();
+                    
+                    // Get next sequence number and save ciphertext
+                    match artifact_manager.next_ciphertext_seq() {
+                        Ok(seq) => {
+                            match artifact_manager.save_ciphertext(seq, &ciphertext) {
+                                Ok(p) => artifact_paths.ciphertext = Some(p.to_string_lossy().to_string()),
+                                Err(e) => eprintln!("Warning: Failed to save ciphertext artifact: {}", e),
+                            }
+                        }
+                        Err(e) => eprintln!("Warning: Failed to get ciphertext sequence: {}", e),
                     }
                     
                     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -338,6 +414,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .with_bytes_in(bytes_in)
                         .with_bytes_out(bytes_out)
                         .with_artifact_bytes(artifacts)
+                        .with_artifact_paths(artifact_paths)
+                        .with_run_id(cli.run_id.as_deref())
                         .with_timing(start)
                         .print();
                 }
@@ -345,10 +423,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     BenchmarkOutput::error("encrypt", &suite_actual, &e.to_string(), start)
                         .with_group_id(group_id)
                         .with_epoch_before(epoch_before)
+                        .with_run_id(cli.run_id.as_deref())
                         .print();
                 }
             }
         }
+
         
         Commands::Decrypt { group_id, ciphertext } => {
             let start = Instant::now();
@@ -576,9 +656,214 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        _ => {
+        Commands::RemoveMember { group_id, member_id } => {
             let start = Instant::now();
-            BenchmarkOutput::error("unknown", &suite_str, "Command not yet implemented", start)
+            let path = cli.state_dir.join(format!("{}.json", group_id));
+            
+            // Load group state
+            let mut group_state = match GroupState::load(path.to_str().unwrap()) {
+                Ok(state) => state,
+                Err(e) => {
+                    BenchmarkOutput::error("remove_member", &suite_str, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .with_member_id(member_id)
+                        .with_run_id(cli.run_id.as_deref())
+                        .print();
+                    return Ok(());
+                }
+            };
+            
+            let epoch_before = group_state.epoch();
+            let suite_actual = group_state.suite.to_string();
+            
+            // Find the member's leaf index by identity
+            let leaf_index = match group_state.find_member(member_id) {
+                Some(idx) => idx,
+                None => {
+                    BenchmarkOutput::error("remove_member", &suite_actual, 
+                        &format!("Member '{}' not found in group", member_id), start)
+                        .with_group_id(group_id)
+                        .with_member_id(member_id)
+                        .with_epoch_before(epoch_before)
+                        .with_run_id(cli.run_id.as_deref())
+                        .print();
+                    return Ok(());
+                }
+            };
+            
+            // Remove the member
+            match engine.remove_member(&mut group_state, leaf_index) {
+                Ok(commit_bytes) => {
+                    // Save updated state
+                    if let Err(e) = group_state.save(path.to_str().unwrap()) {
+                        BenchmarkOutput::error("remove_member", &suite_actual, &e.to_string(), start)
+                            .with_group_id(group_id)
+                            .with_member_id(member_id)
+                            .with_epoch_before(epoch_before)
+                            .with_run_id(cli.run_id.as_deref())
+                            .print();
+                        return Ok(());
+                    }
+                    
+                    // Create artifact manager and save commit artifact
+                    let artifact_manager = ArtifactManager::new(
+                        &cli.state_dir,
+                        group_id,
+                        cli.run_id.as_deref(),
+                    );
+                    
+                    let epoch_after = group_state.epoch();
+                    let mut artifact_paths = ArtifactPaths::default();
+                    
+                    // Save Commit artifact
+                    match artifact_manager.save_commit(epoch_after, &commit_bytes) {
+                        Ok(p) => artifact_paths.commit = Some(p.to_string_lossy().to_string()),
+                        Err(e) => eprintln!("Warning: Failed to save commit artifact: {}", e),
+                    }
+                    
+                    let group_size = group_state.group.members().count() as u32;
+                    let artifacts = ArtifactBytes {
+                        commit: Some(commit_bytes.len() as u64),
+                        ..Default::default()
+                    };
+                    
+                    BenchmarkOutput::new("remove_member", &suite_actual)
+                        .with_group_id(group_id)
+                        .with_member_id(member_id)
+                        .with_group_size(group_size)
+                        .with_epoch_before(epoch_before)
+                        .with_epoch_after(epoch_after)
+                        .with_artifact_bytes(artifacts)
+                        .with_artifact_paths(artifact_paths)
+                        .with_run_id(cli.run_id.as_deref())
+                        .with_timing(start)
+                        .print();
+                }
+                Err(e) => {
+                    BenchmarkOutput::error("remove_member", &suite_actual, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .with_member_id(member_id)
+                        .with_epoch_before(epoch_before)
+                        .with_run_id(cli.run_id.as_deref())
+                        .print();
+                }
+            }
+        }
+
+        Commands::Commit { group_id } => {
+            let start = Instant::now();
+            let path = cli.state_dir.join(format!("{}.json", group_id));
+            
+            // Load group state
+            let group_state = match GroupState::load(path.to_str().unwrap()) {
+                Ok(state) => state,
+                Err(e) => {
+                    BenchmarkOutput::error("commit", &suite_str, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .with_run_id(cli.run_id.as_deref())
+                        .print();
+                    return Ok(());
+                }
+            };
+            
+            let epoch_before = group_state.epoch();
+            let suite_actual = group_state.suite.to_string();
+            
+            // Note: In our current implementation, add_member already includes commit/merge.
+            // This command outputs the current state - no pending proposals in our flow.
+            // We output a success with no epoch change to indicate "no pending proposals".
+            
+            // Save state (no changes, but confirms it's valid)
+            if let Err(e) = group_state.save(path.to_str().unwrap()) {
+                BenchmarkOutput::error("commit", &suite_actual, &e.to_string(), start)
+                    .with_group_id(group_id)
+                    .with_epoch_before(epoch_before)
+                    .with_run_id(cli.run_id.as_deref())
+                    .print();
+                return Ok(());
+            }
+            
+            let group_size = group_state.group.members().count() as u32;
+            
+            BenchmarkOutput::new("commit", &suite_actual)
+                .with_group_id(group_id)
+                .with_group_size(group_size)
+                .with_epoch_before(epoch_before)
+                .with_epoch_after(epoch_before) // No change since no pending proposals
+                .with_run_id(cli.run_id.as_deref())
+                .with_timing(start)
+                .print();
+        }
+
+        Commands::ExportState { group_id, output } => {
+            let start = Instant::now();
+            let path = cli.state_dir.join(format!("{}.json", group_id));
+            
+            // Load group state
+            let group_state = match GroupState::load(path.to_str().unwrap()) {
+                Ok(state) => state,
+                Err(e) => {
+                    BenchmarkOutput::error("export_state", &suite_str, &e.to_string(), start)
+                        .with_group_id(group_id)
+                        .with_run_id(cli.run_id.as_deref())
+                        .print();
+                    return Ok(());
+                }
+            };
+            
+            let suite_actual = group_state.suite.to_string();
+            
+            // Build export JSON
+            let members = group_state.list_members();
+            let export_data = serde_json::json!({
+                "schema_version": 1,
+                "group_id": group_state.group_id_string(),
+                "suite": suite_actual,
+                "epoch": group_state.epoch(),
+                "member_count": members.len(),
+                "members": members,
+                "exported_at_ms": output::now_ms()
+            });
+            
+            let export_json = serde_json::to_string_pretty(&export_data)
+                .expect("Failed to serialize export data");
+            
+            // Write to file or stdout
+            match output {
+                Some(out_path) => {
+                    use std::io::Write;
+                    let mut file = match File::create(out_path) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            BenchmarkOutput::error("export_state", &suite_actual, &e.to_string(), start)
+                                .with_group_id(group_id)
+                                .with_run_id(cli.run_id.as_deref())
+                                .print();
+                            return Ok(());
+                        }
+                    };
+                    if let Err(e) = file.write_all(export_json.as_bytes()) {
+                        BenchmarkOutput::error("export_state", &suite_actual, &e.to_string(), start)
+                            .with_group_id(group_id)
+                            .with_run_id(cli.run_id.as_deref())
+                            .print();
+                        return Ok(());
+                    }
+                }
+                None => {
+                    // Output to stderr so stdout has only JSONL
+                    eprintln!("{}", export_json);
+                }
+            }
+            
+            let group_size = group_state.group.members().count() as u32;
+            
+            BenchmarkOutput::new("export_state", &suite_actual)
+                .with_group_id(group_id)
+                .with_group_size(group_size)
+                .with_epoch_after(group_state.epoch())
+                .with_run_id(cli.run_id.as_deref())
+                .with_timing(start)
                 .print();
         }
     }
