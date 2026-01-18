@@ -95,6 +95,15 @@ pub struct SerializedIdentity {
     pub signature_key_bytes: Vec<u8>,
 }
 
+/// Information about a group member for listing and export.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MemberInfo {
+    /// The member's leaf index in the group tree.
+    pub leaf_index: u32,
+    /// The member's identity string (decoded from credential).
+    pub identity: String,
+}
+
 /// Serializable PQC/Hybrid keypair for persistence
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SerializedPqcKeyPair {
@@ -325,6 +334,37 @@ impl GroupState {
     /// Get the current epoch of the group.
     pub fn epoch(&self) -> u64 {
         self.group.epoch().as_u64()
+    }
+    
+    /// List all members in the group with their leaf indices and identities.
+    pub fn list_members(&self) -> Vec<MemberInfo> {
+        self.group
+            .members()
+            .map(|member| {
+                // Extract identity bytes from the credential
+                let identity_bytes = member.credential.serialized_content();
+                let identity = String::from_utf8_lossy(identity_bytes).to_string();
+                
+                MemberInfo {
+                    leaf_index: member.index.u32(),
+                    identity,
+                }
+            })
+            .collect()
+    }
+    
+    /// Find a member by their identity string.
+    /// Returns the leaf index if found.
+    pub fn find_member(&self, identity: &str) -> Option<u32> {
+        self.group.members().find_map(|member| {
+            let member_identity = member.credential.serialized_content();
+            let member_identity_str = String::from_utf8_lossy(member_identity);
+            if member_identity_str == identity {
+                Some(member.index.u32())
+            } else {
+                None
+            }
+        })
     }
 }
 

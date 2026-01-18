@@ -13,7 +13,7 @@ use crate::provider::{PqcKemProvider, HybridKemProvider};
 pub mod state;
 pub mod suite;
 
-pub use state::{GroupState, MemberIdentity, SerializedIdentity, SerializedPqcKeyPair, SerializedKeyPackageData, CURRENT_SCHEMA_VERSION};
+pub use state::{GroupState, MemberIdentity, MemberInfo, SerializedIdentity, SerializedPqcKeyPair, SerializedKeyPackageData, CURRENT_SCHEMA_VERSION};
 pub use suite::CryptoSuite;
 
 use openmls::prelude::*;
