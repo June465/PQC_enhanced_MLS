@@ -9,9 +9,12 @@ This project provides a secure group messaging engine with support for:
 - **PQC KEM** - Post-quantum security using ML-KEM 768 (FIPS 203)
 - **Hybrid KEM** - Defense-in-depth combining X25519 + ML-KEM 768
 
+> [!IMPORTANT]
+> **Current PQC Scope**: This implementation replaces KEM (key encapsulation) with post-quantum algorithms (ML-KEM 768). Signature schemes remain classical (Ed25519). ML-DSA signatures are planned for future iterations.
+
 ## Project Status
 
-✅ **Phase 9 Complete** - Deterministic artifact persistence implemented.
+✅ **Phase 11 Complete** - Documentation Polish implemented.
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -25,10 +28,10 @@ This project provides a secure group messaging engine with support for:
 | Phase 7 | Welcome/Join Flow + State Versioning | ✅ Done |
 | Phase 8 | Benchmark-Ready JSONL Metrics | ✅ Done |
 | Phase 9 | Deterministic Artifact Persistence | ✅ Done |
-| Phase 10 | CLI Completeness | ⏳ Pending |
-| Phase 11 | Documentation Polish | ⏳ Pending |
+| Phase 10 | CLI Completeness | ✅ Done |
+| Phase 11 | Documentation Polish | ✅ Done |
 
-**Test Coverage:** 76 tests covering correctness, negative cases, PQC integration, security properties, join flow, benchmark output, and artifact persistence.
+**Test Coverage:** 82 tests covering correctness, negative cases, PQC integration, security properties, join flow, benchmark output, artifact persistence, and CLI completeness.
 
 
 ## Project Structure
@@ -44,6 +47,29 @@ PQC_enhanced_MLS/
 ├── mls_pqc_cli/        # Command-line interface
 └── phases/             # Implementation documentation
 ```
+
+## State Directory Layout
+
+The CLI stores all state and artifacts in `.mls_state/` (configurable via `--state-dir`):
+
+```
+.mls_state/
+├── <group_id>.json              # Group state for creator
+├── <group_id>_<member_id>.json  # Joined member state
+├── <group_id>/
+│   └── artifacts/
+│       ├── welcome/
+│       │   └── <ts>_<member>.bin    # Welcome messages
+│       ├── commit/
+│       │   └── <ts>_epoch<N>.bin    # Commit messages
+│       └── ciphertext/
+│           └── <ts>_<seq>.bin       # Encrypted messages
+└── key_packages/
+    ├── <member_id>.bin              # Public key package
+    └── <member_id>_data.json        # Private key package data
+```
+
+When using `--run-id`, artifacts are isolated under `.mls_state/<run_id>/`.
 
 ## Building
 
@@ -66,6 +92,29 @@ The `--suite` flag selects the cryptographic suite:
 | `classic` | Standard X25519/Ed25519 | Classical |
 | `pqc-kem` | ML-KEM 768 only | Post-Quantum |
 | `hybrid-kem` | X25519 + ML-KEM 768 | Defense-in-Depth |
+
+### Command Reference
+
+| Command | Description | Required Args | Optional Args |
+|---------|-------------|---------------|---------------|
+| `init-group` | Create new group | `-g`, `-m` | `--suite` |
+| `key-package` | Generate key package | `-m`, `-o` | `--suite` |
+| `add-member` | Add member to group | `-g`, `-k` | |
+| `join-group` | Join via Welcome | `-g`, `-m`, `--welcome`, `--key-package-data` | |
+| `encrypt` | Encrypt message | `-g`, `-p` | |
+| `decrypt` | Decrypt message | `-g`, `-c` | |
+| `remove-member` | Remove member | `-g`, `-m` | |
+| `commit` | Commit proposals | `-g` | |
+| `export-state` | Export group info | `-g` | `-o` |
+
+### Global Options
+
+| Option | Short | Description | Default |
+|--------|-------|-------------|---------|
+| `--suite` | `-s` | Crypto suite | `classic` |
+| `--state-dir` | `-d` | State directory | `.mls_state` |
+| `--output-format` | `-o` | Output format | `jsonl` |
+| `--run-id` | | Experiment isolation ID | None |
 
 ### Commands
 
@@ -119,7 +168,7 @@ cargo run -p mls_pqc_cli -- add-member -g "my-group" -k bob_kp.bin
 
 ```powershell
 # Bob joins using Welcome message and his key package data
-cargo run -p mls_pqc_cli -- join-group -g "my-group" -m "Bob" --welcome welcome.bin --key-package-data bob_kp_data.json
+cargo run -p mls_pqc_cli -- join-group -g "my-group" -m "Bob" --welcome .mls_state/my-group/artifacts/welcome/<timestamp>_bob_kp.bin --key-package-data bob_kp_data.json
 ```
 
 **Output (JSONL):**
@@ -148,113 +197,193 @@ cargo run -p mls_pqc_cli -- encrypt -g "my-group" -p "Hello, secure world!"
 cargo run -p mls_pqc_cli -- decrypt -g "my-group" -c "<base64-ciphertext>"
 ```
 
-### Global Options
+#### Remove Member from Group
 
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--suite` | `-s` | Crypto suite | `classic` |
-| `--state-dir` | `-d` | State directory | `.mls_state` |
-| `--output-format` | `-o` | Output format | `jsonl` |
-| `--run-id` | | Experiment isolation ID | None |
+```powershell
+# Remove a member by identity
+cargo run -p mls_pqc_cli -- remove-member -g "my-group" -m "Bob"
+```
 
-### Complete Workflow Example: Secure Team Communication
+**Output (JSONL):**
+```json
+{"schema_version":1,"ts_ms":1736930172000,"suite":"classic","op":"remove_member","group_id":"my-group","member_id":"Bob","group_size":1,"epoch_before":1,"epoch_after":2,"ok":true,"time_ms":25,"artifact_bytes":{"commit":456}}
+```
 
-This example demonstrates a complete secure group communication workflow using the Hybrid KEM suite (X25519 + ML-KEM 768) for defense-in-depth security.
+> **Note:** The removed member can no longer decrypt messages sent after their removal (forward secrecy).
 
-#### Scenario
-Alice wants to create a quantum-resistant secure group and add Bob. They will then exchange encrypted messages.
+#### Export Group State
+
+```powershell
+# Export group state to stdout
+cargo run -p mls_pqc_cli -- export-state -g "my-group"
+
+# Export group state to file
+cargo run -p mls_pqc_cli -- export-state -g "my-group" -o group_info.json
+```
+
+**Output (to stderr for stdout, JSONL to stdout):**
+```json
+{
+  "schema_version": 1,
+  "group_id": "my-group",
+  "suite": "classic",
+  "epoch": 2,
+  "member_count": 2,
+  "members": [
+    {"leaf_index": 0, "identity": "Alice"},
+    {"leaf_index": 2, "identity": "Charlie"}
+  ],
+  "exported_at_ms": 1736930173000
+}
+```
+
+#### Commit Pending Proposals
+
+```powershell
+# Commit any pending proposals (validates current state)
+cargo run -p mls_pqc_cli -- commit -g "my-group"
+```
+
+> **Note:** In our flow, `add-member` auto-commits, so this command primarily validates and re-saves the state.
+
+---
+
+## Complete Workflow Example
+
+This example demonstrates a complete secure group communication workflow using the Hybrid KEM suite for defense-in-depth security, including member joining, bidirectional messaging, and member removal with forward secrecy.
+
+### Scenario
+Alice creates a quantum-resistant secure group, adds Bob, they exchange messages, then Alice removes Bob to demonstrate forward secrecy.
 
 ```powershell
 # ============================================
 # STEP 1: Alice creates a quantum-resistant group
 # ============================================
-# The --suite hybrid-kem flag enables X25519 + ML-KEM 768 protection
-# This provides security against both classical and quantum attacks
-
 cargo run -p mls_pqc_cli -- --suite hybrid-kem init-group -g "project-alpha" -m "Alice"
 
-# Output (JSONL):
-# {"schema_version":1,"ts_ms":1736930167000,"suite":"hybrid_kem","op":"init_group",
-#  "group_id":"project-alpha","member_id":"Alice","group_size":1,"epoch_after":0,
-#  "ok":true,"time_ms":42}
+# Output: {"schema_version":1,"suite":"hybrid_kem","op":"init_group","group_id":"project-alpha",
+#          "member_id":"Alice","group_size":1,"epoch_after":0,"ok":true,"time_ms":42}
 
 # ============================================
 # STEP 2: Bob generates his key package
 # ============================================
-# A key package contains Bob's public keys for joining groups
-# Creates bob_keypackage.bin (public) and bob_keypackage_data.json (private)
-
 cargo run -p mls_pqc_cli -- --suite hybrid-kem key-package -m "Bob" -o bob_keypackage.bin
 
-# Output (JSONL):
-# {"schema_version":1,"ts_ms":1736930168000,"suite":"hybrid_kem","op":"key_package",
-#  "member_id":"Bob","ok":true,"time_ms":15,"artifact_bytes":{"key_package":2100}}
+# Creates: bob_keypackage.bin (public) and bob_keypackage_data.json (private)
 
 # ============================================
 # STEP 3: Alice adds Bob to the group
 # ============================================
-# Alice imports Bob's key package and adds him to the group
-# This generates a Welcome message for Bob and updates the group epoch
-
 cargo run -p mls_pqc_cli -- add-member -g "project-alpha" -k bob_keypackage.bin
 
-# Output (JSONL):
-# {"schema_version":1,"ts_ms":1736930169000,"suite":"hybrid_kem","op":"add_member",
-#  "group_id":"project-alpha","group_size":2,"epoch_before":0,"epoch_after":1,
-#  "ok":true,"time_ms":35,"bytes_in":2100,"artifact_bytes":{"welcome":4500,"commit":890}}
+# Output: {"suite":"hybrid_kem","op":"add_member","epoch_before":0,"epoch_after":1,
+#          "artifact_bytes":{"welcome":4500,"commit":890},...}
 
 # ============================================
-# STEP 4: Alice sends an encrypted message
+# STEP 4: Bob joins the group using the Welcome message
 # ============================================
-# The message is encrypted using the group's current keys
-# Only current group members can decrypt it
+# Find the welcome file in artifacts directory
+$welcome = Get-ChildItem .mls_state/project-alpha/artifacts/welcome/*.bin | Select-Object -First 1
 
+cargo run -p mls_pqc_cli -- join-group -g "project-alpha" -m "Bob" --welcome $welcome.FullName --key-package-data bob_keypackage_data.json
+
+# Output: {"suite":"hybrid_kem","op":"join_group","group_id":"project-alpha",
+#          "member_id":"Bob","group_size":2,"epoch_after":1,"ok":true}
+
+# ============================================
+# STEP 5: Alice sends an encrypted message
+# ============================================
 cargo run -p mls_pqc_cli -- encrypt -g "project-alpha" -p "Meeting at 3pm in the secure room"
 
-# Ciphertext output to stderr: <base64-encoded-ciphertext>
-# JSONL output to stdout:
-# {"schema_version":1,"ts_ms":1736930170000,"suite":"hybrid_kem","op":"encrypt",
-#  "group_id":"project-alpha","group_size":2,"epoch_before":1,"epoch_after":1,
-#  "ok":true,"time_ms":5,"bytes_in":34,"bytes_out":1450,"artifact_bytes":{"ciphertext":1450}}
+# Ciphertext output to stderr, JSONL metrics to stdout
+# Save the ciphertext for Bob to decrypt
 
 # ============================================
-# STEP 5: Bob decrypts the message
+# STEP 6: Bob decrypts the message
 # ============================================
-# Bob uses his group state to decrypt the ciphertext
-# Replace <ciphertext> with the actual base64 data from Step 4
-
-cargo run -p mls_pqc_cli -- decrypt -g "project-alpha" -c "<base64-ciphertext>"
+# Use Bob's state file (project-alpha_Bob.json)
+cargo run -p mls_pqc_cli -- -d .mls_state decrypt -g "project-alpha_Bob" -c "<base64-ciphertext>"
 
 # Plaintext output to stderr: Meeting at 3pm in the secure room
-# JSONL output to stdout:
-# {"schema_version":1,"ts_ms":1736930171000,"suite":"hybrid_kem","op":"decrypt",
-#  "group_id":"project-alpha","group_size":2,"epoch_before":1,"epoch_after":1,
-#  "ok":true,"time_ms":3,"bytes_in":1450,"bytes_out":34}
+
+# ============================================
+# STEP 7: Alice removes Bob from the group
+# ============================================
+cargo run -p mls_pqc_cli -- remove-member -g "project-alpha" -m "Bob"
+
+# Output: {"op":"remove_member","epoch_before":1,"epoch_after":2,"group_size":1,...}
+
+# ============================================
+# STEP 8: Forward Secrecy - Bob cannot decrypt new messages
+# ============================================
+# Alice sends a message after Bob's removal
+cargo run -p mls_pqc_cli -- encrypt -g "project-alpha" -p "Secret post-removal message"
+
+# Bob tries to decrypt with his old state (epoch 1) - FAILS
+# This demonstrates forward secrecy: removed members cannot read future messages
 ```
 
-#### Understanding the Workflow
+### Understanding the Workflow
 
 | Step | What Happens | Security Property |
 |------|--------------|-------------------|
 | 1. Init Group | Creates MlsGroup, generates identity keys | Group isolation |
 | 2. Key Package | Pre-key bundle for async group joining | Forward secrecy setup |
 | 3. Add Member | Commit + Welcome message generated | Authenticated membership |
-| 4. Encrypt | Application message encrypted with epoch key | Confidentiality + Authenticity |
-| 5. Decrypt | Epoch key used to decrypt and verify sender | Message integrity |
+| 4. Join Group | Process Welcome, sync to group epoch | Group consensus |
+| 5. Encrypt | Application message encrypted with epoch key | Confidentiality + Authenticity |
+| 6. Decrypt | Epoch key used to decrypt and verify sender | Message integrity |
+| 7. Remove Member | Commit updates group, advances epoch | Revocation |
+| 8. Forward Secrecy | Old epoch keys cannot decrypt new messages | Post-compromise security |
 
-#### Suite Comparison Example
+---
+
+## Running Benchmarks
+
+The CLI outputs JSONL with timing and size metrics suitable for benchmarking and research.
+
+### Using Run IDs for Experiment Isolation
 
 ```powershell
-# Classic (standard security - vulnerable to quantum attacks)
-cargo run -p mls_pqc_cli -- init-group -g "classic-group" -m "Alice"
+# Run experiment with isolated state directory
+cargo run -p mls_pqc_cli -- --run-id exp1 --suite hybrid-kem init-group -g grp1 -m Alice
 
-# PQC-only (quantum-resistant but no classical fallback)
-cargo run -p mls_pqc_cli -- --suite pqc-kem init-group -g "pqc-group" -m "Alice"
-
-# Hybrid (recommended - defense-in-depth)
-cargo run -p mls_pqc_cli -- --suite hybrid-kem init-group -g "hybrid-group" -m "Alice"
+# All artifacts stored under .mls_state/exp1/
 ```
 
+### Collecting Metrics
+
+```powershell
+# Extract timing from operations
+cargo run -p mls_pqc_cli -- encrypt -g grp1 -p "test" 2>$null | ConvertFrom-Json | Select-Object time_ms
+
+# Compare suites
+@("classic", "pqc-kem", "hybrid-kem") | ForEach-Object {
+    cargo run -p mls_pqc_cli -- --run-id "bench_$_" --suite $_ init-group -g test -m Alice 2>$null
+}
+```
+
+### Metrics Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `schema_version` | u32 | Output schema version (currently 1) |
+| `ts_ms` | u64 | Unix timestamp in milliseconds |
+| `suite` | string | Crypto suite (classic, pqc_kem, hybrid_kem) |
+| `op` | string | Operation name |
+| `group_id` | string | Group identifier |
+| `member_id` | string | Member identifier (when applicable) |
+| `group_size` | u32 | Number of members in group |
+| `epoch_before` | u64 | Epoch before operation |
+| `epoch_after` | u64 | Epoch after operation |
+| `ok` | bool | Operation success |
+| `time_ms` | u64 | Operation duration in milliseconds |
+| `bytes_in` | u64 | Input size in bytes |
+| `bytes_out` | u64 | Output size in bytes |
+| `artifact_bytes` | object | Size of generated artifacts |
+| `err` | string | Error message (when ok=false) |
+
+---
 
 ## Key Sizes
 
@@ -270,6 +399,7 @@ cargo run -p mls_pqc_cli -- --suite hybrid-kem init-group -g "hybrid-group" -m "
 - **ML-KEM 768**: NIST FIPS 203 compliant, providing ~192-bit quantum security
 - **Hybrid Mode**: Combines classical and PQC for defense-in-depth
 - **Key Derivation**: HKDF-SHA256 for combining shared secrets
+- **Forward Secrecy**: Removed members cannot decrypt messages sent after removal
 
 ## License
 
