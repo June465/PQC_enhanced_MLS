@@ -33,7 +33,7 @@ pub struct Cli {
     pub suite: Suite,
 
     /// Output format for results
-    #[arg(long, short = 'o', value_enum, default_value_t = OutputFormat::Jsonl, global = true)]
+    #[arg(long, short = 'f', value_enum, default_value_t = OutputFormat::Jsonl, global = true)]
     pub output_format: OutputFormat,
 
     /// Optional run identifier for experiment grouping
@@ -127,6 +127,10 @@ pub enum Commands {
         /// Message to encrypt (plaintext)
         #[arg(long, short = 'p')]
         plaintext: String,
+
+        /// Optional output file to write base64 ciphertext (avoids PowerShell stderr wrapping)
+        #[arg(long)]
+        ct_file: Option<PathBuf>,
     },
 
     /// Decrypt a message
@@ -138,6 +142,10 @@ pub enum Commands {
         /// Base64-encoded ciphertext to decrypt
         #[arg(long, short = 'c')]
         ciphertext: String,
+
+        /// Optional output file to write plaintext (avoids PowerShell stderr wrapping)
+        #[arg(long)]
+        pt_file: Option<PathBuf>,
     },
 
     /// Generate a key package
@@ -154,7 +162,6 @@ pub enum Commands {
     /// Join an existing group using a Welcome message
     JoinGroup {
         /// Group identifier (for state file naming)
-        #[arg(long, short = 'g')]
         group_id: String,
 
         /// Identity of the joining member
@@ -343,7 +350,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         
-        Commands::Encrypt { group_id, plaintext } => {
+        Commands::Encrypt { group_id, plaintext, ct_file } => {
             let start = Instant::now();
             let path = cli.state_dir.join(format!("{}.json", group_id));
             
@@ -403,8 +410,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ..Default::default()
                     };
                     
-                    // Output the ciphertext to stderr so stdout has only JSONL
-                    eprintln!("{}", ct_b64);
+                    // Output the ciphertext: to a file if --ct-file is given, otherwise stderr
+                    if let Some(out_path) = ct_file {
+                        if let Err(e) = std::fs::write(out_path, &ct_b64) {
+                            BenchmarkOutput::error("encrypt", &suite_actual, &format!("Failed to write ciphertext file: {}", e), start)
+                                .with_group_id(group_id)
+                                .print();
+                            return Ok(());
+                        }
+                    } else {
+                        eprintln!("{}", ct_b64);
+                    }
                     
                     BenchmarkOutput::new("encrypt", &suite_actual)
                         .with_group_id(group_id)
@@ -430,7 +446,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         
-        Commands::Decrypt { group_id, ciphertext } => {
+        Commands::Decrypt { group_id, ciphertext, pt_file } => {
             let start = Instant::now();
             let path = cli.state_dir.join(format!("{}.json", group_id));
             
@@ -475,8 +491,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let bytes_out = pt_bytes.len() as u64;
                     let group_size = group_state.group.members().count() as u32;
                     
-                    // Output plaintext to stderr so stdout has only JSONL
-                    eprintln!("{}", pt);
+                    // Output plaintext: to a file if --pt-file is given, otherwise stderr
+                    if let Some(out_path) = pt_file {
+                        if let Err(e) = std::fs::write(out_path, &pt) {
+                            BenchmarkOutput::error("decrypt", &suite_actual, &format!("Failed to write plaintext file: {}", e), start)
+                                .with_group_id(group_id)
+                                .print();
+                            return Ok(());
+                        }
+                    } else {
+                        eprintln!("{}", pt);
+                    }
                     
                     BenchmarkOutput::new("decrypt", &suite_actual)
                         .with_group_id(group_id)

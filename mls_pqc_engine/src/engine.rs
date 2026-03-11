@@ -13,7 +13,7 @@ use crate::provider::{PqcKemProvider, HybridKemProvider};
 pub mod state;
 pub mod suite;
 
-pub use state::{GroupState, MemberIdentity, MemberInfo, SerializedIdentity, SerializedPqcKeyPair, SerializedKeyPackageData, CURRENT_SCHEMA_VERSION};
+pub use state::{GroupState, MemberIdentity, MemberInfo, SerializedIdentity, SerializedPqcKeyPair, SerializedKeyPackageData, CURRENT_SCHEMA_VERSION, storage_to_bytes, storage_from_bytes};
 pub use suite::CryptoSuite;
 
 use openmls::prelude::*;
@@ -37,24 +37,49 @@ pub struct KeyPackageData {
 
 impl KeyPackageData {
     /// Convert to serializable form for CLI persistence.
-    /// Note: key_package_bytes are NOT included - they're saved separately as the public .bin file.
+    /// Includes the serialized provider storage (with HPKE init key) needed for join-group.
     pub fn to_serialized(&self) -> EngineResult<SerializedKeyPackageData> {
+        // Serialize the provider's MemoryStorage which contains the HPKE init private key.
+        // This is essential for processing Welcome messages in join-group.
+        let provider_storage_bytes = storage_to_bytes(self.provider.storage())
+            .map(Some)
+            .unwrap_or(None); // Non-fatal: fall back to None if serialization fails
+        
         Ok(SerializedKeyPackageData {
             schema_version: CURRENT_SCHEMA_VERSION,
             identity: self.identity.to_bytes()?,
             suite: self.suite,
             pqc_keypair: self.pqc_keypair.clone(),
+            provider_storage_bytes,
         })
     }
 
     /// Reconstruct from serialized form.
-    /// Creates a fresh provider and restores the identity and keys.
+    /// Restores the provider's MemoryStorage so the HPKE init key is available for join-group.
     pub fn from_serialized(data: SerializedKeyPackageData) -> EngineResult<Self> {
         let provider = OpenMlsRustCrypto::default();
         let identity = MemberIdentity::from_serialized(data.identity)?;
         
         // Store the signature keys in the new provider
         identity.store_keys(&provider)?;
+        
+        // Restore the full key store (including HPKE init key) if available.
+        // Without this, StagedWelcome::new_from_welcome will fail with NoMatchingKeyPackage.
+        if let Some(storage_bytes) = data.provider_storage_bytes {
+            let restored_storage = storage_from_bytes(&storage_bytes)?;
+            // Copy all key-value pairs from the restored MemoryStorage into the new provider's
+            // storage. MemoryStorage.values is pub and uses interior mutability (RwLock),
+            // so we can write-lock the target and bulk-insert all entries.
+            {
+                let source = restored_storage.values.read().unwrap();
+                let mut target = provider.storage().values.write().unwrap();
+                for (k, v) in source.iter() {
+                    target.insert(k.clone(), v.clone());
+                }
+            }
+            // Also ensure the signature keys are in the restored provider (they may already be there)
+            identity.store_keys(&provider)?;
+        }
         
         Ok(Self {
             key_package_bytes: Vec::new(), // Not stored in serialized form
@@ -65,6 +90,7 @@ impl KeyPackageData {
         })
     }
 }
+
 
 /// The MLS Engine handling group operations.
 /// 

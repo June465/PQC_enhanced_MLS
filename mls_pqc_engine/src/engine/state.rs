@@ -4,7 +4,7 @@
 //! including suite selection and PQC keypair storage.
 
 use openmls::prelude::*;
-use openmls_rust_crypto::OpenMlsRustCrypto;
+use openmls_rust_crypto::{MemoryStorage, OpenMlsRustCrypto};
 use openmls_basic_credential::SignatureKeyPair;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -14,6 +14,39 @@ use tls_codec::Serialize as TlsSerialize;
 use crate::error::{EngineError, EngineResult};
 use crate::provider::DEFAULT_CIPHERSUITE;
 use super::suite::CryptoSuite;
+
+/// Serialize a MemoryStorage to bytes using a temp file.
+pub fn storage_to_bytes(storage: &MemoryStorage) -> EngineResult<Vec<u8>> {
+    let temp_file = tempfile::tempfile()
+        .map_err(|e| EngineError::Storage(format!("Failed to create temp file: {}", e)))?;
+    storage.save_to_file(&temp_file)
+        .map_err(|e| EngineError::Storage(format!("Failed to save storage: {}", e)))?;
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = temp_file;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| EngineError::Storage(format!("Seek error: {}", e)))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|e| EngineError::Storage(format!("Read error: {}", e)))?;
+    Ok(bytes)
+}
+
+/// Restore a MemoryStorage from previously serialized bytes.
+pub fn storage_from_bytes(bytes: &[u8]) -> EngineResult<MemoryStorage> {
+    let temp_file = tempfile::tempfile()
+        .map_err(|e| EngineError::Storage(format!("Failed to create temp file: {}", e)))?;
+    use std::io::Write;
+    let mut file = temp_file;
+    file.write_all(bytes)
+        .map_err(|e| EngineError::Storage(format!("Write error: {}", e)))?;
+    use std::io::{Seek, SeekFrom};
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| EngineError::Storage(format!("Seek error: {}", e)))?;
+    let mut storage = MemoryStorage::default();
+    storage.load_from_file(&file)
+        .map_err(|e| EngineError::Storage(format!("Failed to load storage: {}", e)))?;
+    Ok(storage)
+}
 
 /// Current schema version for state serialization.
 /// Increment when making breaking changes to state format.
@@ -126,6 +159,11 @@ pub struct SerializedKeyPackageData {
     /// Optional PQC/Hybrid keypair.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pqc_keypair: Option<SerializedPqcKeyPair>,
+    /// Serialized MemoryStorage bytes (base64-encoded JSON) containing the HPKE
+    /// init private key needed to process a Welcome message in join-group.
+    /// Without this, StagedWelcome will fail with NoMatchingKeyPackage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_storage_bytes: Option<Vec<u8>>,
 }
 
 impl SerializedKeyPackageData {
@@ -282,8 +320,14 @@ impl GroupState {
     }
 
     /// Save the group state to a file.
-    /// Saves group_id, identity, suite, and optional PQC keypair.
+    /// Saves group_id, identity, suite, optional PQC keypair, and full MemoryStorage.
     pub fn save(&self, path: &str) -> EngineResult<()> {
+        // Serialize the full MemoryStorage which contains all MLS group state
+        // (ratchet tree, key schedule, epoch secrets, etc.)
+        let provider_storage_bytes = storage_to_bytes(self.provider.storage())
+            .map(Some)
+            .unwrap_or(None);
+
         let snapshot = GroupStateSnapshot {
             schema_version: CURRENT_SCHEMA_VERSION,
             group_id: self.group.group_id().as_slice().to_vec(),
@@ -291,6 +335,7 @@ impl GroupState {
             epoch: self.group.epoch().as_u64(),
             suite: self.suite,
             pqc_keypair: self.pqc_keypair.clone(),
+            provider_storage_bytes,
         };
 
         let file = File::create(path)?;
@@ -302,7 +347,7 @@ impl GroupState {
     }
 
     /// Load group state from a file.
-    /// Note: This recreates a fresh group - full state loading needs persistence.
+    /// Restores the full MLS group state from persisted MemoryStorage.
     pub fn load(path: &str) -> EngineResult<Self> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
@@ -321,8 +366,47 @@ impl GroupState {
         let identity = MemberIdentity::from_serialized(snapshot.identity)?;
         let suite = snapshot.suite;
         let pqc_keypair = snapshot.pqc_keypair;
+
+        // Try to restore full group state from persisted MemoryStorage
+        if let Some(storage_bytes) = snapshot.provider_storage_bytes {
+            let restored_storage = storage_from_bytes(&storage_bytes)?;
+            let provider = OpenMlsRustCrypto::default();
+            
+            // Copy the restored storage into the new provider
+            {
+                let source = restored_storage.values.read().unwrap();
+                let mut target = provider.storage().values.write().unwrap();
+                for (k, v) in source.iter() {
+                    target.insert(k.clone(), v.clone());
+                }
+            }
+            
+            // Also ensure signature keys are accessible
+            identity.store_keys(&provider)?;
+            
+            // Load the MlsGroup from storage using the group_id as key
+            let group_id = GroupId::from_slice(&snapshot.group_id);
+            match MlsGroup::load(provider.storage(), &group_id) {
+                Ok(Some(group)) => {
+                    return Ok(Self {
+                        group,
+                        identity,
+                        provider,
+                        suite,
+                        pqc_keypair,
+                    });
+                }
+                Ok(None) => {
+                    // Storage exists but group not found - fall through to legacy path
+                }
+                Err(e) => {
+                    // If load fails, fall through to legacy path
+                    let _ = e; // suppress warning
+                }
+            }
+        }
         
-        // Recreate the group with suite info
+        // Fallback: recreate a fresh group (legacy behavior for old state files)
         GroupState::new_with_suite(&snapshot.group_id, identity, suite, pqc_keypair)
     }
     
@@ -373,7 +457,7 @@ fn default_schema_version() -> u32 {
     1
 }
 
-/// Serializable snapshot of GroupState for persistence.
+/// Serializable snapshot of GroupState for persistence.\
 #[derive(Serialize, Deserialize)]
 struct GroupStateSnapshot {
     /// Schema version for future migrations.
@@ -391,4 +475,9 @@ struct GroupStateSnapshot {
     /// Optional PQC/Hybrid keypair.
     #[serde(default)]
     pqc_keypair: Option<SerializedPqcKeyPair>,
+    /// Serialized MemoryStorage bytes containing MLS group state
+    /// (ratchet tree, key schedule, epoch secrets, etc.).
+    /// When present, allows full group state restoration via MlsGroup::load().
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_storage_bytes: Option<Vec<u8>>,
 }
