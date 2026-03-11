@@ -41,6 +41,29 @@ impl ArtifactBytes {
     }
 }
 
+/// Artifact file paths for operations that produce persistent artifacts.
+#[derive(Serialize, Default)]
+pub struct ArtifactPaths {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub welcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ciphertext: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_package: Option<String>,
+}
+
+impl ArtifactPaths {
+    /// Check if any artifact paths are set.
+    pub fn is_empty(&self) -> bool {
+        self.welcome.is_none()
+            && self.commit.is_none()
+            && self.ciphertext.is_none()
+            && self.key_package.is_none()
+    }
+}
+
 /// Comprehensive benchmark output for all CLI operations.
 ///
 /// Every CLI command emits exactly one JSONL line with this structure.
@@ -82,6 +105,12 @@ pub struct BenchmarkOutput {
     /// Artifact sizes produced by operation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_bytes: Option<ArtifactBytes>,
+    /// Artifact file paths for persisted artifacts
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_paths: Option<ArtifactPaths>,
+    /// Run identifier for experiment grouping
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
     /// Error message if ok=false
     #[serde(skip_serializing_if = "Option::is_none")]
     pub err: Option<String>,
@@ -105,6 +134,8 @@ impl BenchmarkOutput {
             bytes_in: None,
             bytes_out: None,
             artifact_bytes: None,
+            artifact_paths: None,
+            run_id: None,
             err: None,
         }
     }
@@ -162,6 +193,20 @@ impl BenchmarkOutput {
         if !artifacts.is_empty() {
             self.artifact_bytes = Some(artifacts);
         }
+        self
+    }
+
+    /// Set artifact_paths.
+    pub fn with_artifact_paths(mut self, paths: ArtifactPaths) -> Self {
+        if !paths.is_empty() {
+            self.artifact_paths = Some(paths);
+        }
+        self
+    }
+
+    /// Set run_id.
+    pub fn with_run_id(mut self, run_id: Option<&str>) -> Self {
+        self.run_id = run_id.map(|s| s.to_string());
         self
     }
 

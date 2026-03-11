@@ -155,7 +155,7 @@ pub enum Commands {
         member_id: String,
 
         /// Output file path for the key package
-        #[arg(long, short = 'o')]
+        #[arg(long, short = 'O')]
         output: PathBuf,
     },
 
@@ -184,7 +184,7 @@ pub enum Commands {
         group_id: String,
 
         /// Output file path (optional, defaults to stdout)
-        #[arg(long, short = 'o')]
+        #[arg(long, short = 'O')]
         output: Option<PathBuf>,
     },
 }
