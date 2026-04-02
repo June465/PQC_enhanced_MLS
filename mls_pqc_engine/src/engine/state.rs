@@ -261,7 +261,6 @@ impl GroupState {
             epoch: self.group.epoch().as_u64(),
             suite: self.suite,
             pqc_keypair: self.pqc_keypair.clone(),
-            provider_storage_bytes,
         };
 
         let file = File::create(path)?;

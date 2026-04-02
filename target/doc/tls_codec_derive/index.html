@@ -1,0 +1,194 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Derive macros for traits in `tls_codec`"><title>tls_codec_derive - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="tls_codec_derive" data-themes="" data-resource-suffix="" data-rustdoc-version="1.94.0 (4a4ef493e 2026-03-02)" data-channel="1.94.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../static.files/storage-e2aeef58.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate tls_codec_derive</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../tls_codec_derive/index.html">tls_<wbr>codec_<wbr>derive</a><span class="version">0.4.2</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#derive-macros-for-traits-in-tls_codec" title="Derive macros for traits in `tls_codec`">Derive macros for traits in <code>tls_codec</code></a><ul><li><a href="#warning" title="Warning">Warning</a></li><li><a href="#parsing-unknown-values" title="Parsing unknown values">Parsing unknown values</a></li><li><a href="#available-attributes" title="Available attributes">Available attributes</a></li><li><a href="#conditional-deserialization-via-the-conditionally_deserializable-attribute-macro" title="Conditional deserialization via the `conditionally_deserializable` attribute macro">Conditional deserialization via the <code>conditionally_deserializable</code> attribute macro</a></li></ul></li></ul><h3><a href="#derives">Crate Items</a></h3><ul class="block"><li><a href="#derives" title="Derive Macros">Derive Macros</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><h1>Crate <span>tls_<wbr>codec_<wbr>derive</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/tls_codec_derive/lib.rs.html#1-1430">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="derive-macros-for-traits-in-tls_codec"><a class="doc-anchor" href="#derive-macros-for-traits-in-tls_codec">§</a>Derive macros for traits in <code>tls_codec</code></h2>
+<p>Derive macros can be used to automatically implement the
+<a href="../tls_codec::Serialize"><code>Serialize</code></a>,
+<a href="../tls_codec::SerializeBytes"><code>SerializeBytes</code></a>,
+<a href="../tls_codec::Deserialize"><code>Deserialize</code></a>,
+<a href="../tls_codec::DeserializeBytes"><code>DeserializeBytes</code></a>, and
+<a href="../tls_codec::Size"><code>Size</code></a> traits for structs and enums. Note that the
+functions of the <a href="../tls_codec::Serialize"><code>Serialize</code></a> and
+<a href="../tls_codec::Deserialize"><code>Deserialize</code></a> traits (and thus the
+corresponding derive macros) require the <code>"std"</code> feature to work.</p>
+<h3 id="warning"><a class="doc-anchor" href="#warning">§</a>Warning</h3>
+<p>The derive macros support deriving the <code>tls_codec</code> traits for enumerations
+and the resulting serialized format complies with <a href="https://datatracker.ietf.org/doc/html/rfc8446#section-3.8">the “variants” section of
+the TLS RFC</a>.
+However support is limited to enumerations that are serialized with their
+discriminant immediately followed by the variant data. If this is not
+appropriate (e.g. the format requires other fields between the discriminant
+and variant data), the <code>tls_codec</code> traits can be implemented manually.</p>
+<h3 id="parsing-unknown-values"><a class="doc-anchor" href="#parsing-unknown-values">§</a>Parsing unknown values</h3>
+<p>In many cases it is necessary to deserialize structs with unknown values,
+e.g. when receiving unknown TLS extensions. In this case the deserialize
+function returns an <code>Error::UnknownValue</code> with a <code>u64</code> value of the unknown
+type.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>tls_codec_derive::{TlsDeserialize, TlsSerialize, TlsSize};
+
+<span class="attr">#[derive(TlsDeserialize, TlsSerialize, TlsSize)]
+#[repr(u16)]
+</span><span class="kw">enum </span>TypeWithUnknowns {
+    First = <span class="number">1</span>,
+    Second = <span class="number">2</span>,
+}
+
+<span class="attr">#[test]
+</span><span class="kw">fn </span>type_with_unknowns() {
+    <span class="kw">let </span>incoming = [<span class="number">0x00u8</span>, <span class="number">0x03</span>]; <span class="comment">// This must be parsed into TypeWithUnknowns into an unknown
+    </span><span class="kw">let </span>deserialized = TypeWithUnknowns::tls_deserialize_exact(incoming);
+    <span class="macro">assert!</span>(<span class="macro">matches!</span>(deserialized, <span class="prelude-val">Err</span>(Error::UnknownValue(<span class="number">3</span>))));
+}</code></pre></div><h3 id="available-attributes"><a class="doc-anchor" href="#available-attributes">§</a>Available attributes</h3>
+<p>Attributes can be used to control serialization and deserialization on a
+per-field basis.</p>
+<h4 id="with"><a class="doc-anchor" href="#with">§</a>with</h4><div class="example-wrap"><pre class="language-text"><code>#[tls_codec(with = &quot;prefix&quot;)]</code></pre></div>
+<p>This attribute may be applied to a struct field. It indicates that deriving
+any of the <code>tls_codec</code> traits for the containing struct calls the following
+functions:</p>
+<ul>
+<li><code>prefix::tls_deserialize</code> when deriving <code>Deserialize</code></li>
+<li><code>prefix::tls_serialize</code> when deriving <code>Serialize</code></li>
+<li><code>prefix::tls_serialized_len</code> when deriving <code>Size</code></li>
+</ul>
+<p><code>prefix</code> can be a path to a module, type or trait where the functions are
+defined.</p>
+<p>Their expected signatures match the corresponding methods in the traits.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>tls_codec_derive::{TlsSerialize, TlsSize};
+
+<span class="attr">#[derive(TlsSerialize, TlsSize)]
+</span><span class="kw">struct </span>Bytes {
+    <span class="attr">#[tls_codec(with = <span class="string">"bytes"</span>)]
+    </span>values: Vec&lt;u8&gt;,
+}
+
+<span class="kw">mod </span>bytes {
+    <span class="kw">use </span>std::io::Write;
+    <span class="kw">use </span>tls_codec::{Serialize, Size, TlsByteSliceU32};
+
+    <span class="kw">pub fn </span>tls_serialized_len(v: <span class="kw-2">&amp;</span>[u8]) -&gt; usize {
+        TlsByteSliceU32(v).tls_serialized_len()
+    }
+
+    <span class="kw">pub fn </span>tls_serialize&lt;W: Write&gt;(v: <span class="kw-2">&amp;</span>[u8], writer: <span class="kw-2">&amp;mut </span>W) -&gt; <span class="prelude-ty">Result</span>&lt;usize, tls_codec::Error&gt; {
+        TlsByteSliceU32(v).tls_serialize(writer)
+    }
+}</code></pre></div><h4 id="discriminant"><a class="doc-anchor" href="#discriminant">§</a>discriminant</h4><div class="example-wrap"><pre class="language-text"><code>#[tls_codec(discriminant = 123)]
+#[tls_codec(discriminant = &quot;path::to::const::or::enum::Variant&quot;)]</code></pre></div>
+<p>This attribute may be applied to an enum variant to specify the discriminant
+to use when serializing it. If all variants are units (e.g. they do not have
+any data), this attribute must not be used and the desired discriminants
+should be assigned to the variants using standard Rust syntax (<code>Variant = Discriminant</code>).</p>
+<p>For enumerations with non-unit variants, if no variant has this attribute,
+the serialization discriminants will start from zero. If this attribute is
+used on a variant and the following variant does not have it, its
+discriminant will be equal to the previous variant discriminant plus 1. This
+behavior is referred to as “implicit discriminants”.</p>
+<p>You can also provide paths that lead to <code>const</code> definitions or enum
+Variants. The important thing is that any of those path expressions must
+resolve to something that can be coerced to the <code>#[repr(enum_repr)]</code> of the
+enum. Please note that there are checks performed at compile time to check
+if the provided value fits within the bounds of the <code>enum_repr</code> to avoid
+misuse.</p>
+<p>Note: When using paths <em>once</em> in your enum discriminants, as we do not have
+enough information to deduce the next implicit discriminant (the constant
+expressions those paths resolve is only evaluated at a later compilation
+stage than macros), you will be forced to use explicit discriminants for all
+the other Variants of your enum.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>tls_codec_derive::{TlsSerialize, TlsSize};
+
+<span class="kw">const </span>CONST_DISCRIMINANT: u8 = <span class="number">5</span>;
+<span class="attr">#[repr(u8)]
+</span><span class="kw">enum </span>TokenType {
+    Constant = <span class="number">3</span>,
+    Variant = <span class="number">4</span>,
+}
+
+<span class="attr">#[derive(TlsSerialize, TlsSize)]
+#[repr(u8)]
+</span><span class="kw">enum </span>TokenImplicit {
+    <span class="attr">#[tls_codec(discriminant = <span class="number">5</span>)]
+    </span>Int(u32),
+    <span class="comment">// This will have the discriminant 6 as it's implicitly determined
+    </span>Bytes([u8; <span class="number">16</span>]),
+}
+
+<span class="attr">#[derive(TlsSerialize, TlsSize)]
+#[repr(u8)]
+</span><span class="kw">enum </span>TokenExplicit {
+    <span class="attr">#[tls_codec(discriminant = <span class="string">"TokenType::Constant"</span>)]
+    </span>Constant(u32),
+    <span class="attr">#[tls_codec(discriminant = <span class="string">"TokenType::Variant"</span>)]
+    </span>Variant(Vec&lt;u8&gt;),
+    <span class="attr">#[tls_codec(discriminant = <span class="string">"CONST_DISCRIMINANT"</span>)]
+    </span>StaticConstant(u8),
+}</code></pre></div><h4 id="skip"><a class="doc-anchor" href="#skip">§</a>skip</h4><div class="example-wrap"><pre class="language-text"><code>#[tls_codec(skip)]</code></pre></div>
+<p>This attribute may be applied to a struct field to specify that it should be
+skipped. Skipping means that the field at hand will neither be serialized
+into TLS bytes nor deserialized from TLS bytes. For deserialization, it is
+required to populate the field with a known value. Thus, when <code>skip</code> is
+used, the field type needs to implement the <a href="https://doc.rust-lang.org/1.94.0/core/default/trait.Default.html" title="trait core::default::Default">Default</a> trait so it can be
+populated with a default value.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>tls_codec_derive::{TlsSerialize, TlsDeserialize, TlsSize};
+
+<span class="kw">struct </span>CustomStruct;
+
+<span class="kw">impl </span>Default <span class="kw">for </span>CustomStruct {
+    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+        CustomStruct {}
+    }
+}
+
+<span class="attr">#[derive(TlsSerialize, TlsDeserialize, TlsSize)]
+</span><span class="kw">struct </span>StructWithSkip {
+    a: u8,
+    <span class="attr">#[tls_codec(skip)]
+    </span>b: CustomStruct,
+    c: u8,
+}</code></pre></div><h3 id="conditional-deserialization-via-the-conditionally_deserializable-attribute-macro"><a class="doc-anchor" href="#conditional-deserialization-via-the-conditionally_deserializable-attribute-macro">§</a>Conditional deserialization via the <code>conditionally_deserializable</code> attribute macro</h3>
+<p>In some cases, it can be useful to have two variants of a struct, where one
+is deserializable and one isn’t. For example, the deserializable variant of
+the struct could represent an unverified message, where only verification
+produces the verified variant. Further processing could then be restricted
+to the undeserializable struct variant.</p>
+<p>A pattern like this can be created via the <code>conditionally_deserializable</code>
+attribute macro (requires the <code>conditional_deserialization</code> feature flag).</p>
+<p>The macro adds a boolean const generic to the struct and creates two
+aliases, one for the deserializable variant (with a “<code>Deserializable</code>”
+prefix) and one for the undeserializable one (with an “<code>Undeserializable</code>”
+prefix).</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>tls_codec::{Serialize, Deserialize};
+<span class="kw">use </span>tls_codec_derive::{TlsSerialize, TlsSize, conditionally_deserializable};
+
+<span class="attr">#[conditionally_deserializable]
+#[derive(TlsSize, TlsSerialize, PartialEq, Debug)]
+</span><span class="kw">struct </span>ExampleStruct {
+    a: u8,
+    b: u16,
+}
+
+<span class="kw">let </span>undeserializable_struct = UndeserializableExampleStruct { a: <span class="number">1</span>, b: <span class="number">2 </span>};
+<span class="kw">let </span>serialized = undeserializable_struct.tls_serialize_detached().unwrap();
+<span class="kw">let </span>deserializable_struct =
+    DeserializableExampleStruct::tls_deserialize(<span class="kw-2">&amp;mut </span>serialized.as_slice()).unwrap();</code></pre></div>
+<p>The helper macro <code>#[tls_codec(cd_field)]</code> can be used to mark a field as
+conditionally deserializable, thus allowing nested conditionally
+deserializable structs.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>tls_codec::{Serialize, Deserialize};
+<span class="kw">use </span>tls_codec_derive::{TlsSerialize, TlsSize, conditionally_deserializable};
+
+<span class="attr">#[conditionally_deserializable]
+#[derive(TlsSize, TlsSerialize, PartialEq, Debug)]
+</span><span class="kw">struct </span>ExampleStruct {
+    a: u8,
+    b: u16,
+}
+
+<span class="attr">#[conditionally_deserializable]
+#[derive(TlsSize, TlsSerialize, PartialEq, Debug)]
+</span><span class="kw">struct </span>NestedExampleStruct {
+   <span class="attr">#[tls_codec(cd_field)]
+   </span>example_struct: ExampleStruct,
+}</code></pre></div></div></details><h2 id="derives" class="section-header">Derive Macros<a href="#derives" class="anchor">§</a></h2><dl class="item-table"><dt><a class="derive" href="derive.TlsDeserialize.html" title="derive tls_codec_derive::TlsDeserialize">TlsDeserialize</a></dt><dt><a class="derive" href="derive.TlsDeserializeBytes.html" title="derive tls_codec_derive::TlsDeserializeBytes">TlsDeserialize<wbr>Bytes</a></dt><dt><a class="derive" href="derive.TlsSerialize.html" title="derive tls_codec_derive::TlsSerialize">TlsSerialize</a></dt><dt><a class="derive" href="derive.TlsSerializeBytes.html" title="derive tls_codec_derive::TlsSerializeBytes">TlsSerialize<wbr>Bytes</a></dt><dt><a class="derive" href="derive.TlsSize.html" title="derive tls_codec_derive::TlsSize">TlsSize</a></dt></dl></section></div></main></body></html>

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CURRENT_VERSION"],"mod":["traits"],"trait":["Entity","Key","StorageProvider"]};
