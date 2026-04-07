@@ -12,6 +12,7 @@ results/
 *_data.json
 *.bin
 artifacts/
+IEEE_Access_Format.md
 
 # Benchmarks and Logs
 results.jsonl
