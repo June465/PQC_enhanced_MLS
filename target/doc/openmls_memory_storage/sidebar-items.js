@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["MemoryStorageError"],"mod":["persistence"],"struct":["MemoryStorage"]};

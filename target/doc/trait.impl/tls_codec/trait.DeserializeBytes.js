@@ -1,9 +1,0 @@
-(function() {
-    const implementors = Object.fromEntries([["openmls_traits",[["impl <a class=\"trait\" href=\"tls_codec/trait.DeserializeBytes.html\" title=\"trait tls_codec::DeserializeBytes\">DeserializeBytes</a> for <a class=\"enum\" href=\"openmls_traits/types/enum.Ciphersuite.html\" title=\"enum openmls_traits::types::Ciphersuite\">Ciphersuite</a>",0],["impl <a class=\"trait\" href=\"tls_codec/trait.DeserializeBytes.html\" title=\"trait tls_codec::DeserializeBytes\">DeserializeBytes</a> for <a class=\"enum\" href=\"openmls_traits/types/enum.SignatureScheme.html\" title=\"enum openmls_traits::types::SignatureScheme\">SignatureScheme</a>",0],["impl <a class=\"trait\" href=\"tls_codec/trait.DeserializeBytes.html\" title=\"trait tls_codec::DeserializeBytes\">DeserializeBytes</a> for <a class=\"struct\" href=\"openmls_traits/types/struct.HpkeCiphertext.html\" title=\"struct openmls_traits::types::HpkeCiphertext\">HpkeCiphertext</a>",0],["impl <a class=\"trait\" href=\"tls_codec/trait.DeserializeBytes.html\" title=\"trait tls_codec::DeserializeBytes\">DeserializeBytes</a> for <a class=\"struct\" href=\"openmls_traits/types/struct.HpkePrivateKey.html\" title=\"struct openmls_traits::types::HpkePrivateKey\">HpkePrivateKey</a>",0],["impl <a class=\"trait\" href=\"tls_codec/trait.DeserializeBytes.html\" title=\"trait tls_codec::DeserializeBytes\">DeserializeBytes</a> for <a class=\"struct\" href=\"openmls_traits/types/struct.VerifiableCiphersuite.html\" title=\"struct openmls_traits::types::VerifiableCiphersuite\">VerifiableCiphersuite</a>",0]]],["tls_codec",[]]]);
-    if (window.register_implementors) {
-        window.register_implementors(implementors);
-    } else {
-        window.pending_implementors = implementors;
-    }
-})()
-//{"start":59,"fragment_lengths":[1508,17]}

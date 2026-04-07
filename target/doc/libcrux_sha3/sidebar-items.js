@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Algorithm"],"fn":["digest_size","hash","sha224","sha224_ema","sha256","sha256_ema","sha384","sha384_ema","sha512","sha512_ema","shake128","shake128_ema","shake256","shake256_ema"],"mod":["neon","portable","simd"],"type":["Sha3_224Digest","Sha3_256Digest","Sha3_384Digest","Sha3_512Digest"]};

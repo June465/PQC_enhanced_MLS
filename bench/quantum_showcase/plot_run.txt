@@ -1,0 +1,64 @@
+=== Starting PQC-Enhanced MLS Quantum Threat Showcase ===
+This execution runs Shor's period-finding component on Qiskit.
+
+Circuit constructed successfully!
+        ┌───┐                                             ┌─────────────┐┌─┐   »
+   q_0: ┤ H ├───────■─────────────────────────────────────┤0            ├┤M├───»
+        ├───┤       │                                     │             │└╥┘┌─┐»
+   q_1: ┤ H ├───────┼──────────────■──────────────────────┤1 QFT_dagger ├─╫─┤M├»
+        ├───┤       │              │                      │             │ ║ └╥┘»
+   q_2: ┤ H ├───────┼──────────────┼──────────────■───────┤2            ├─╫──╫─»
+        ├───┤┌──────┴──────┐┌──────┴──────┐┌──────┴──────┐└─────────────┘ ║  ║ »
+   q_3: ┤ X ├┤0            ├┤0            ├┤0            ├────────────────╫──╫─»
+        └───┘│             ││             ││             │                ║  ║ »
+   q_4: ─────┤1            ├┤1            ├┤1            ├────────────────╫──╫─»
+             │  7^1 mod 15 ││  7^2 mod 15 ││  7^4 mod 15 │                ║  ║ »
+   q_5: ─────┤2            ├┤2            ├┤2            ├────────────────╫──╫─»
+             │             ││             ││             │                ║  ║ »
+   q_6: ─────┤3            ├┤3            ├┤3            ├────────────────╫──╫─»
+             └─────────────┘└─────────────┘└─────────────┘                ║  ║ »
+meas: 3/══════════════════════════════════════════════════════════════════╩══╩═»
+                                                                          0  1 »
+«           
+«   q_0: ───
+«           
+«   q_1: ───
+«        ┌─┐
+«   q_2: ┤M├
+«        └╥┘
+«   q_3: ─╫─
+«         ║ 
+«   q_4: ─╫─
+«         ║ 
+«   q_5: ─╫─
+«         ║ 
+«   q_6: ─╫─
+«         ║ 
+«meas: 3/═╩═
+«         2 
+
+Attempting to connect to IBM Quantum hardware...
+
+[WARNING] Could not load IBM Quantum account. Defaulting to local Aer Simulator.
+Details: 'No matching instances found for the following filters: .'
+
+To run on real hardware: 
+ 1. Get your API token from https://quantum.ibm.com/ 
+ 2. Run the following python code once:
+    from qiskit_ibm_runtime import QiskitRuntimeService
+    QiskitRuntimeService.save_account(channel='ibm_quantum_platform', token='<YOUR_TOKEN>')
+ 3. Run this script again.
+
+Transpiling circuit for backend optimization...
+Transpilation [OK]. Running sampling...
+Job submitted! Job ID is bd9bf405-c8f0-4cae-b450-4510abb854f8
+Waiting for job to complete (this may take a few minutes if queued on real hardware)...
+
+Measurement Counts (Period Finding Output): {'000': 266, '100': 243, '110': 228, '010': 263}
+Generated histogram plot at: C:\Users\gowri\OneDrive\Documents\GitHub\PQC_enhanced_MLS\bench\quantum_showcase\shor_histogram.png
+
+[SUCCESS] Quantum simulation complete!
+The above outputs map directly to period `r`. Since `r` is found efficiently via
+quantum mechanics, classical cryptography (RSA) relying on Prime Factorization is broken.
+This explicitly demonstrates why transitioning to Hybrid and pure PQC (Kyber/Dilithium)
+within MLS architectures is practically necessary, mitigating immediate data capture risks.
