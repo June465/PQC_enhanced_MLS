@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["init","shake128_absorb_final","shake128_squeeze_first_five_blocks","shake128_squeeze_first_three_blocks","shake128_squeeze_next_block","shake256_absorb_final","shake256_squeeze_first_block","shake256_squeeze_next_block"],"struct":["KeccakState"]};

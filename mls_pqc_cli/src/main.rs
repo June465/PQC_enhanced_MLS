@@ -140,8 +140,12 @@ pub enum Commands {
         group_id: String,
 
         /// Base64-encoded ciphertext to decrypt
-        #[arg(long, short = 'c')]
-        ciphertext: String,
+        #[arg(long, short = 'c', required_unless_present = "ciphertext_file")]
+        ciphertext: Option<String>,
+
+        /// Path to the binary ciphertext artifact file
+        #[arg(long, conflicts_with = "ciphertext")]
+        ciphertext_file: Option<PathBuf>,
 
         /// Optional output file to write plaintext (avoids PowerShell stderr wrapping)
         #[arg(long)]
@@ -446,7 +450,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         
-        Commands::Decrypt { group_id, ciphertext, pt_file } => {
+        Commands::Decrypt { group_id, ciphertext, ciphertext_file, pt_file } => {
             let start = Instant::now();
             let path = cli.state_dir.join(format!("{}.json", group_id));
             
@@ -463,16 +467,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let epoch_before = group_state.epoch();
             let suite_actual = group_state.suite.to_string();
             
-            use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-            let ct_bytes = match BASE64.decode(ciphertext) {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    BenchmarkOutput::error("decrypt", &suite_actual, &format!("Base64 error: {}", e), start)
+            let ct_bytes = if let Some(path) = ciphertext_file {
+                let mut f = match File::open(path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        BenchmarkOutput::error("decrypt", &suite_actual, &format!("Failed to open ciphertext file: {}", e), start)
+                            .with_group_id(group_id)
+                            .with_epoch_before(epoch_before)
+                            .print();
+                        return Ok(());
+                    }
+                };
+                let mut buf = Vec::new();
+                if let Err(e) = f.read_to_end(&mut buf) {
+                    BenchmarkOutput::error("decrypt", &suite_actual, &format!("Failed to read ciphertext file: {}", e), start)
                         .with_group_id(group_id)
                         .with_epoch_before(epoch_before)
                         .print();
                     return Ok(());
                 }
+                buf
+            } else if let Some(ct_b64) = ciphertext {
+                use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+                match BASE64.decode(ct_b64) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        BenchmarkOutput::error("decrypt", &suite_actual, &format!("Base64 error: {}", e), start)
+                            .with_group_id(group_id)
+                            .with_epoch_before(epoch_before)
+                            .print();
+                        return Ok(());
+                    }
+                }
+            } else {
+                BenchmarkOutput::error("decrypt", &suite_actual, "Either --ciphertext or --ciphertext-file must be provided", start)
+                    .with_group_id(group_id)
+                    .with_epoch_before(epoch_before)
+                    .print();
+                return Ok(());
             };
             
             let bytes_in = ct_bytes.len() as u64;

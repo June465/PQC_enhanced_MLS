@@ -1,0 +1,30 @@
+Traceback (most recent call last):
+  File "C:\Users\gowri\OneDrive\Documents\GitHub\PQC_enhanced_MLS\bench\quantum_showcase\plot_dashboard.py", line 6, in <module>
+    fig = plt.figure(figsize=(16, 10))
+  File "C:\Users\gowri\OneDrive\Documents\GitHub\PQC_enhanced_MLS\bench\quantum_showcase\venv\Lib\site-packages\matplotlib\pyplot.py", line 1041, in figure
+    manager = new_figure_manager(
+        num, figsize=figsize, dpi=dpi,
+        facecolor=facecolor, edgecolor=edgecolor, frameon=frameon,
+        FigureClass=FigureClass, **kwargs)
+  File "C:\Users\gowri\OneDrive\Documents\GitHub\PQC_enhanced_MLS\bench\quantum_showcase\venv\Lib\site-packages\matplotlib\pyplot.py", line 551, in new_figure_manager
+    return _get_backend_mod().new_figure_manager(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\gowri\OneDrive\Documents\GitHub\PQC_enhanced_MLS\bench\quantum_showcase\venv\Lib\site-packages\matplotlib\backend_bases.py", line 3504, in new_figure_manager
+    return cls.new_figure_manager_given_figure(num, fig)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\gowri\OneDrive\Documents\GitHub\PQC_enhanced_MLS\bench\quantum_showcase\venv\Lib\site-packages\matplotlib\backend_bases.py", line 3509, in new_figure_manager_given_figure
+    return cls.FigureCanvas.new_manager(figure, num)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\gowri\OneDrive\Documents\GitHub\PQC_enhanced_MLS\bench\quantum_showcase\venv\Lib\site-packages\matplotlib\backend_bases.py", line 1785, in new_manager
+    return cls.manager_class.create_with_canvas(cls, figure, num)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gowri\OneDrive\Documents\GitHub\PQC_enhanced_MLS\bench\quantum_showcase\venv\Lib\site-packages\matplotlib\backends\_backend_tk.py", line 546, in create_with_canvas
+    icon_img = ImageTk.PhotoImage(file=icon_fname, master=window)
+  File "C:\Users\gowri\OneDrive\Documents\GitHub\PQC_enhanced_MLS\bench\quantum_showcase\venv\Lib\site-packages\PIL\ImageTk.py", line 101, in __init__
+    image = _get_image_from_kw(kw)
+  File "C:\Users\gowri\OneDrive\Documents\GitHub\PQC_enhanced_MLS\bench\quantum_showcase\venv\Lib\site-packages\PIL\ImageTk.py", line 51, in _get_image_from_kw
+    return Image.open(source)
+           ~~~~~~~~~~^^^^^^^^
+  File "C:\Users\gowri\OneDrive\Documents\GitHub\PQC_enhanced_MLS\bench\quantum_showcase\venv\Lib\site-packages\PIL\Image.py", line 3711, in open
+    raise UnidentifiedImageError(msg)
+PIL.UnidentifiedImageError: cannot identify image file 'C:\\Users\\gowri\\OneDrive\\Documents\\GitHub\\PQC_enhanced_MLS\\bench\\quantum_showcase\\venv\\Lib\\site-packages\\matplotlib\\mpl-data\\images\\matplotlib.png'

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["NistP384"],"type":["CompressedPoint","EncodedPoint","FieldBytes","SecretKey","U384","U48"]};
